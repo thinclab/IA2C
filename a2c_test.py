@@ -26,17 +26,21 @@ from random import randrange
 from Org import Org
 
 GAMMA = 0.9
-NUM_AGENTS = 3
+NUM_AGENTS = 20
 NUM_EPISODES = 50000
 STEPS_PER_EPISODE = 30
 NOISE = 20
 DEBUG = False
 
+critic_actions = 6
+count = 4
 env = Org()
-
+for i in range(2,NUM_AGENTS):
+    critic_actions += count
+    count+=1
 n_features = 1
 actor_actions = 3 
-critic_actions = 9
+
 critic, actor, D = [], [], []
 for i in range(NUM_AGENTS):
     critic.append([])
