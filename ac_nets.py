@@ -1,127 +1,109 @@
-'''====================================================================================
-Generic Actor-Critic Network classes with functions to build, train, and run the NNs.
-
-Copyright (C) May, 2024  Bikramjit Banerjee
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
-
-===================================================================================='''
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.optim as optim
 import numpy as np
-from torch.optim import Adam
-from torch.distributions import Categorical
+import gymnasium as gym
+from gymnasium.spaces import Discrete
+import torch.distributions as dist
 
-hidden_size = 6
+class Encoder(nn.Module):
+    def __init__(self, public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim):
+        super(Encoder, self).__init__()
+        # Define individual input layers
+        self.public_obs_fc = nn.Linear(public_obs_dim, 128)
+        self.private_obs_fc = nn.Linear(private_obs_dim, 128)
+        self.action_fc = nn.Linear(action_dim, 128)
+        self.action_dist_fc = nn.Linear(action_dist_dim, 128)
+        
+        # Define a layer to combine all inputs
+        self.combined_fc = nn.Linear(128 * 4, 256)
+        
+        # Define the final layer to produce the latent vector
+        self.latent_fc = nn.Linear(256, latent_dim)
+        
+    def forward(self, public_obs, private_obs, action, action_dist):
+        # Process each input separately
+        public_obs_out = torch.relu(self.public_obs_fc(public_obs))
+        private_obs_out = torch.relu(self.private_obs_fc(private_obs))
+        action_out = torch.relu(self.action_fc(action))
+        action_dist_out = torch.relu(self.action_dist_fc(action_dist))
+        
+        # Concatenate the processed inputs
+        print("pubdim= ", action_out.size())
+        combined = torch.cat((public_obs_out, private_obs_out, action_out, action_dist_out), dim=1)
+        
+        # Process the combined inputs
+        combined_out = torch.relu(self.combined_fc(combined))
+        
+        # Produce the latent vector
+        latent = self.latent_fc(combined_out)
+        
+        return latent
 
-class NeuralNet(nn.Module):
-    def __init__(self, state_dim, action_dim, b_actor=False):
-        super(NeuralNet, self).__init__()
-        self.l1 = nn.Linear(state_dim, hidden_size)
-        self.l2 = nn.Linear(hidden_size, hidden_size)
-        self.l3 = nn.Linear(hidden_size, action_dim)
-        self.b_actor = b_actor
+class Decoder(nn.Module):
+    def __init__(self, latent_dim, public_obs_dim, action_dist_dim):
+        super(Decoder, self).__init__()
+        # Define the layers to reconstruct the inputs
+        self.fc1 = nn.Linear(latent_dim, 256)
+        self.public_obs_fc = nn.Linear(256, public_obs_dim)
+        self.action_dist_fc = nn.Linear(256, action_dist_dim)
+        
+    def forward(self, latent):
+        x = torch.relu(self.fc1(latent))
+        public_obs_recon = self.public_obs_fc(x)
+        action_dist_recon = self.action_dist_fc(x)
+        
+        return public_obs_recon, action_dist_recon
 
-    def forward(self, s):
-        out = F.relu(self.l1(s))
-        out = F.relu(self.l2(out))
-        if self.b_actor:
-            out = F.softmax(self.l3(out), -1)
-        else:
-            out = F.relu(self.l3(out))
-        return out
+class CriticNetwork(nn.Module):
+    def __init__(self, public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim):
+        super(CriticNetwork, self).__init__()
+
+        self.encoder = Encoder(public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim)
+        self.decoder = Decoder(latent_dim, public_obs_dim, action_dist_dim)
     
-class CriticNetwork:
-    def __init__(self, name, n_features, critic_actions, lr, cuda=False):
-        self.num_outs = critic_actions
-        self.net = NeuralNet(n_features, critic_actions)
-        if cuda:
-            self.net.cuda()
-        self.loss = nn.MSELoss()
-        self.optimizer = Adam(self.net.parameters(), lr=lr)
-        self.cuda = cuda
-        self.losses = []
-        
-    def run_main(self, obs, grad=False): # (N_S X N_E X N_F) -->  (N_S X N_E X N_A)
-        if not grad:
-            with torch.no_grad():
-                out = self.net(obs)
-        else:
-            out = self.net(obs)
-        return out
+    def forward(self, public_obs, private_obs, action, action_dist):
+        latent = self.encoder(public_obs, private_obs, action, action_dist)
+        return self.decoder(latent)
     
-    def batch_update(self, obs, act, target, action_distribution=False): # (N_S X N_E X N_F), (N_S X N_E X 1), (N_S X N_E X 1)
-        self.optimizer.zero_grad()
-        Q = self.net.forward(obs) #(N_S X N_E X N_A)
-        if not action_distribution:
-            q_sel = F.one_hot(act.squeeze(-1).long(), num_classes=self.num_outs).float() # (N_S X N_E X N_A)
-        else:
-            q_sel = act # (N_S X N_E X N_A)
-        dot_prd = (Q*q_sel).sum(-1, keepdims=True) # (N_S X N_E X 1)
-        loss = self.loss(target, dot_prd)
-        loss.backward()
-        self.optimizer.step()
-        if self.cuda:
-            get_loss = loss.cpu().data.numpy()
-        else:
-            get_loss = loss.detach().numpy()
-        self.losses.append(get_loss)
-        if len(self.losses)>20:
-            del self.losses[0]
-        self.critic_loss = np.mean(self.losses)
+    def compute_loss(self, public_obs, private_obs, action, action_dist, true_public_obs, true_action_dist, alpha, C_prime, C):
+        latent, (public_obs_recon, action_dist_recon) = self.forward(public_obs, private_obs, action, action_dist)
+
+        # Mean squared error for the reconstruction of the public observation
+        recon_loss = nn.MSELoss()(public_obs_recon, true_public_obs)
         
-
-class ActorNetwork:
-    def __init__(self, name, n_features, actor_actions, lr, beta, cuda=False):
-        self.num_outs = actor_actions
-        self.net = NeuralNet(n_features, actor_actions, b_actor=True)
-        if cuda:
-            self.net.cuda()
-        self.optimizer = Adam(self.net.parameters(), lr=lr)
-        self.cuda = cuda
-        self.beta = beta
-        self.losses=[]
-
-    def sample_action(self, obs, grad=False): # (N_S X N_E X N_F) --> (N_S X N_E X 1)
-        if not grad:
-            with torch.no_grad():
-                probs=self.net(obs)
-        else:
-            probs=self.net(obs)
-        dist = Categorical(probs=probs)
-        act = dist.sample()
-        return act
-
-    def action_distribution(self, obs, grad=False): # (N_S X N_E X N_F) --> (N_S X N_E X N_A)
-        if not grad:
-            with torch.no_grad():
-                out = self.net(obs)
-        else:
-            out = self.net(obs)
-        return out
+        # Log posterior of the Dirichlet-multinomial model
+        log_posterior = -torch.sum(dist.Dirichlet(alpha + C_prime).log_prob(action_dist_recon))
         
-    def batch_update(self, obs, act, adv, retain=False):  # (N_S X N_E X N_F), (N_S X N_E X 1), (N_S X N_E X 1)
-        dist = Categorical(probs=self.net.forward(obs))
-        neglogp = - dist.log_prob(act.squeeze(-1)).unsqueeze(-1)
-        pg_loss = adv * neglogp
-        entropy = dist.entropy().unsqueeze(-1)
-        loss = (pg_loss - self.beta*entropy).mean()
-        loss.backward(retain_graph=retain)
-        self.optimizer.step()
-        if self.cuda:
-            get_loss = loss.cpu().data.numpy()
-        else:
-            get_loss = loss.detach().numpy()
-        self.losses.append(get_loss)
-        if len(self.losses)>20:
-            del self.losses[0]
-        self.actor_loss = np.mean(self.losses)
+        # KL divergence
+        kl_div = dist.kl_divergence(dist.Dirichlet(C), dist.Dirichlet(alpha + C_prime)).sum()
+        
+        # Total loss
+        loss = recon_loss + log_posterior + kl_div
+        return loss
+
+class ActorNetwork(nn.Module):
+    def __init__(self, public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim, action_space_dim):
+        super(ActorNetwork, self).__init__()
+        print(public_obs_dim)
+        self.encoder = Encoder(public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim)
+        
+        # Define the actor network layers
+        self.fc1 = nn.Linear(latent_dim, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.action_head = nn.Linear(128, action_space_dim)
+        
+        # Softmax layer to get action probabilities
+        self.softmax = nn.Softmax(dim=-1)
+        
+    def forward(self, public_obs, private_obs, action, action_dist):
+        # Get the latent representation from the encoder
+        print(public_obs)
+        latent = self.encoder(public_obs, private_obs, action, action_dist)
+        
+        # Pass through the actor network layers
+        x = torch.relu(self.fc1(latent))
+        x = torch.relu(self.fc2(x))
+        action_probs = self.softmax(self.action_head(x))
+        
+        return action_probs
