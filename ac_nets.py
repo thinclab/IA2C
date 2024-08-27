@@ -37,7 +37,7 @@ class NeuralNet(nn.Module):
         if self.b_actor:
             out = F.softmax(self.l3(out), -1)
         else:
-            out = F.relu(self.l3(out))
+            out = self.l3(out)
         return out
     
 class CriticNetwork:
