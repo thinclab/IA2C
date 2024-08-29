@@ -1,7 +1,7 @@
 '''====================================================================================
 Generic Actor-Critic Network classes with functions to build, train, and run the NNs.
 
-Copyright (C) May, 2024  Bikramjit Banerjee
+Copyright (C) August, 2024  Bikramjit Banerjee
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
@@ -50,6 +50,7 @@ class CriticNetwork:
         self.optimizer = Adam(self.net.parameters(), lr=lr)
         self.cuda = cuda
         self.losses = []
+        self.critic_loss = np.inf
         
     def run_main(self, obs, grad=False): # (N_S X N_E X N_F) -->  (N_S X N_E X N_A)
         if not grad:
@@ -90,6 +91,7 @@ class ActorNetwork:
         self.cuda = cuda
         self.beta = beta
         self.losses=[]
+        self.actor_loss = np.inf
 
     def sample_action(self, obs, grad=False): # (N_S X N_E X N_F) --> (N_S X N_E X 1)
         if not grad:

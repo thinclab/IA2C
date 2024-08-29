@@ -43,6 +43,7 @@ class BeliefFilter():
         self.num_models = num_models
     
     def update(self, obs, prev_belief): #(N_E X N_A), (N_E X N_M)
+        #print("----------", obs.shape, prev_belief.shape)
         batch_size = np.shape(obs)[0]
         I = np.tile(np.eye(self.num_models), (batch_size, 1))
         I = np.reshape(I, (batch_size, self.num_models, self.num_models)) #(N_E X N_M X N_M)
