@@ -23,7 +23,7 @@ n_envs = 10
 n_updates = 2000
 n_steps_per_update = 100
 cuda=False
-
+#Change
 if __name__ == '__main__':
     envs = gym.make_vec("Taxi-v3", num_envs=n_envs)
     gamma = 0.99
