@@ -1,109 +1,88 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import numpy as np
-import gymnasium as gym
-from gymnasium.spaces import Discrete
-import torch.distributions as dist
+import torch.nn.functional as F
+from torch.distributions import Dirichlet
 
+# Encoder with LSTM
 class Encoder(nn.Module):
-    def __init__(self, public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim):
+    def __init__(self, input_dim, hidden_dim, action_dim):
         super(Encoder, self).__init__()
-        # Define individual input layers
-        self.public_obs_fc = nn.Linear(public_obs_dim, 128)
-        self.private_obs_fc = nn.Linear(private_obs_dim, 128)
-        self.action_fc = nn.Linear(action_dim, 128)
-        self.action_dist_fc = nn.Linear(action_dist_dim, 128)
-        
-        # Define a layer to combine all inputs
-        self.combined_fc = nn.Linear(128 * 4, 256)
-        
-        # Define the final layer to produce the latent vector
-        self.latent_fc = nn.Linear(256, latent_dim)
-        
-    def forward(self, public_obs, private_obs, action, action_dist):
-        # Process each input separately
-        public_obs_out = torch.relu(self.public_obs_fc(public_obs))
-        private_obs_out = torch.relu(self.private_obs_fc(private_obs))
+        self.public_fc = nn.Linear(input_dim, hidden_dim)
+        self.private_fc = nn.Linear(input_dim, hidden_dim)
+        self.action_fc = nn.Linear(action_dim, hidden_dim)
+        self.action_dist_fc = nn.Linear(action_dim, hidden_dim)
+        self.lstm = nn.LSTM(hidden_dim, 32, batch_first=True)  # Latent layer size is 32
+
+    def forward(self, public_obs, private_obs, action, action_dist, hidden_state):
+        public_out = torch.relu(self.public_fc(public_obs))
+        private_out = torch.relu(self.private_fc(private_obs))
         action_out = torch.relu(self.action_fc(action))
         action_dist_out = torch.relu(self.action_dist_fc(action_dist))
-        
-        # Concatenate the processed inputs
-        print("pubdim= ", action_out.size())
-        combined = torch.cat((public_obs_out, private_obs_out, action_out, action_dist_out), dim=1)
-        
-        # Process the combined inputs
-        combined_out = torch.relu(self.combined_fc(combined))
-        
-        # Produce the latent vector
-        latent = self.latent_fc(combined_out)
-        
-        return latent
+        combined = torch.cat((public_out, private_out, action_out, action_dist_out), dim=-1)
 
+        combined, hidden_state = self.lstm(combined.unsqueeze(0), hidden_state)
+        latent = combined.squeeze(0)  # Latent size is 32
+        return latent, hidden_state
+
+# Decoder
 class Decoder(nn.Module):
-    def __init__(self, latent_dim, public_obs_dim, action_dist_dim):
+    def __init__(self, hidden_dim, output_dim, action_dim):
         super(Decoder, self).__init__()
-        # Define the layers to reconstruct the inputs
-        self.fc1 = nn.Linear(latent_dim, 256)
-        self.public_obs_fc = nn.Linear(256, public_obs_dim)
-        self.action_dist_fc = nn.Linear(256, action_dist_dim)
-        
+        self.obs_reconstruct = nn.Linear(32, output_dim)  # Latent size is 32
+        self.action_dist_reconstruct = nn.Linear(32, action_dim)
+
     def forward(self, latent):
-        x = torch.relu(self.fc1(latent))
-        public_obs_recon = self.public_obs_fc(x)
-        action_dist_recon = self.action_dist_fc(x)
-        
-        return public_obs_recon, action_dist_recon
+        next_obs = torch.relu(self.obs_reconstruct(latent))
+        next_action_dist = F.softmax(self.action_dist_reconstruct(latent), dim=-1)
+        return next_obs, next_action_dist
 
-class CriticNetwork(nn.Module):
-    def __init__(self, public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim):
-        super(CriticNetwork, self).__init__()
+# Actor Network
+class Actor(nn.Module):
+    def __init__(self, input_dim, hidden_dim, action_dim):
+        super(Actor, self).__init__()
+        self.encoder = Encoder(input_dim, hidden_dim, action_dim)
+        self.fc1 = nn.Linear(32, hidden_dim)  # Input from latent space (32)
+        self.fc2 = nn.Linear(hidden_dim, action_dim)
 
-        self.encoder = Encoder(public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim)
-        self.decoder = Decoder(latent_dim, public_obs_dim, action_dist_dim)
-    
-    def forward(self, public_obs, private_obs, action, action_dist):
-        latent = self.encoder(public_obs, private_obs, action, action_dist)
-        return self.decoder(latent)
-    
-    def compute_loss(self, public_obs, private_obs, action, action_dist, true_public_obs, true_action_dist, alpha, C_prime, C):
-        latent, (public_obs_recon, action_dist_recon) = self.forward(public_obs, private_obs, action, action_dist)
+    def forward(self, public_obs, private_obs, action, action_dist, hidden_state):
+        latent, hidden_state = self.encoder(public_obs, private_obs, action, action_dist, hidden_state)
+        x = torch.tanh(self.fc1(latent))  # First hidden layer with Tanh
+        action_probs = F.softmax(self.fc2(torch.relu(x)), dim=-1)  # Second hidden layer with ReLU
+        return action_probs, latent, hidden_state
 
-        # Mean squared error for the reconstruction of the public observation
-        recon_loss = nn.MSELoss()(public_obs_recon, true_public_obs)
-        
-        # Log posterior of the Dirichlet-multinomial model
-        log_posterior = -torch.sum(dist.Dirichlet(alpha + C_prime).log_prob(action_dist_recon))
-        
-        # KL divergence
-        kl_div = dist.kl_divergence(dist.Dirichlet(C), dist.Dirichlet(alpha + C_prime)).sum()
-        
-        # Total loss
-        loss = recon_loss + log_posterior + kl_div
-        return loss
+# Critic Network
+class Critic(nn.Module):
+    def __init__(self, input_dim, hidden_dim, action_dim):
+        super(Critic, self).__init__()
+        self.encoder = Encoder(input_dim, hidden_dim, action_dim)
+        self.decoder = Decoder(hidden_dim, input_dim, action_dim)
+        self.fc1 = nn.Linear(32 + input_dim, hidden_dim)  # Input from latent space (32) + public_obs
+        self.fc2 = nn.Linear(hidden_dim, 1)
 
-class ActorNetwork(nn.Module):
-    def __init__(self, public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim, action_space_dim):
-        super(ActorNetwork, self).__init__()
-        print(public_obs_dim)
-        self.encoder = Encoder(public_obs_dim, private_obs_dim, action_dim, action_dist_dim, latent_dim)
-        
-        # Define the actor network layers
-        self.fc1 = nn.Linear(latent_dim, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.action_head = nn.Linear(128, action_space_dim)
-        
-        # Softmax layer to get action probabilities
-        self.softmax = nn.Softmax(dim=-1)
-        
-    def forward(self, public_obs, private_obs, action, action_dist):
-        # Get the latent representation from the encoder
-        print(public_obs)
-        latent = self.encoder(public_obs, private_obs, action, action_dist)
-        
-        # Pass through the actor network layers
-        x = torch.relu(self.fc1(latent))
-        x = torch.relu(self.fc2(x))
-        action_probs = self.softmax(self.action_head(x))
-        
-        return action_probs
+    def forward(self, public_obs, private_obs, action, action_dist, hidden_state):
+        latent, hidden_state = self.encoder(public_obs, private_obs, action, action_dist, hidden_state)
+        combined_input = torch.cat((public_obs, latent), dim=-1)
+        x = torch.tanh(self.fc1(combined_input))  # First hidden layer with Tanh
+        value = self.fc2(torch.relu(x))  # Second hidden layer with ReLU
+        next_obs, next_action_dist = self.decoder(latent)
+        return value, next_obs, next_action_dist, hidden_state
+
+# Loss Function
+def compute_loss(observed_obs, predicted_obs, observed_action_dist, predicted_action_dist, alpha, C):
+=
+    # 1. Reconstruction Loss: MSE between predicted and observed next observations
+    reconstruction_loss = F.mse_loss(predicted_obs, observed_obs)
+
+    # 2. Log Posterior of the Dirichlet-Multinomial Model
+    log_posterior_loss = -torch.sum(observed_action_dist * torch.log(predicted_action_dist + 1e-10))
+
+    # 3. KL-Divergence between reconstructed and true Dirichlet distributions
+    C_prime = alpha + C
+    reconstructed_dirichlet = Dirichlet(predicted_action_dist)
+    true_dirichlet = Dirichlet(C_prime)
+    kl_divergence = torch.distributions.kl_divergence(reconstructed_dirichlet, true_dirichlet)
+
+    # Total loss
+    total_loss = reconstruction_loss + log_posterior_loss + kl_divergence
+
+    return total_loss
