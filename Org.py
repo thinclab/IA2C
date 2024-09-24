@@ -24,7 +24,7 @@ class Org(gym.Env):
                 self.done = False 
                 self.reward = 0
                 self.hist = 0       
-                self.action_space = gym.spaces.Discrete(2)
+                self.action_space = gym.spaces.Discrete(3)
                 self.observation_space = gym.spaces.Discrete(3)
 
                 if MEM:
