@@ -1,91 +1,89 @@
-import torch
-import torch.optim as optim
-from a2c_nets import Actor, Critic, compute_loss
-from Org import Org  # Import your environment class from Org.py
-
-# Hyperparameters and configurations
-input_dim = 6 
-hidden_dim = 128
-action_dim = 5  
-num_agents = 3 
-
-# Initialize the networks
-actors = [Actor(input_dim, hidden_dim, action_dim) for _ in range(num_agents)]
-critics = [Critic(input_dim, hidden_dim, action_dim) for _ in range(num_agents)]
-
-actor_optimizers = [optim.Adam(actors[i].parameters(), lr=1e-3) for i in range(num_agents)]
-critic_optimizers = [optim.Adam(critics[i].parameters(), lr=1e-4) for i in range(num_agents)]
-
-alpha = 1.0  
-C = 10.0  
-
-# Initialize environment
-env = Org()  # Create an instance of your environment
-
-# Training loop
-num_steps = 10000  
-
-def init_hidden_state(hidden_dim, num_agents):
-    h_0 = torch.zeros(1, num_agents, hidden_dim)
-    c_0 = torch.zeros(1, num_agents, hidden_dim)
-    return (h_0, c_0)
-
-for step in range(num_steps):
-    # Adjusted to unpack what reset() returns
-    public_obs, _ = env.reset()
-    private_obs = public_obs  # Assuming private_obs is the same as public_obs initially
-    action = [torch.zeros(action_dim) for _ in range(num_agents)]
-    action_dist = [torch.ones(action_dim) / action_dim for _ in range(num_agents)]
+import OpenOrg
+from OpenOrg import OrgEnvironment
+import LIA2CAgent
+from LIA2CAgent import LIA2CAgent
+import random
+import numpy as np
+def train_agent(num_episodes=2000, max_steps=100):
     
-    # Convert observations to PyTorch tensors
-    public_obs = torch.tensor(public_obs, dtype=torch.float32)
-    private_obs = torch.tensor(private_obs, dtype=torch.float32)
-    
-    done = [False] * num_agents
-    hidden_states = [init_hidden_state(hidden_dim, num_agents) for _ in range(num_agents)]
+    env = OrgEnvironment(num_employees=10, noise_level=0.1)
+    observation_size = len(OpenOrg.OBSERVATIONS)  
+    action_size = len(OpenOrg.EMPLOYEE_ACTIONS)
+    latent_size = 16
 
-    while not all(done):
-        action_probs = []
-        new_hidden_states = []
-        latents = []
+    agent = LIA2CAgent(observation_size, action_size, latent_size)
 
-        for i in range(num_agents):
-            action_prob, latent, new_hidden_state = actors[i](public_obs, private_obs, action[i], action_dist[i], hidden_states[i])
-            action_probs.append(action_prob)
-            latents.append(latent)
-            new_hidden_states.append(new_hidden_state)
+    for episode in range(num_episodes):
+        observations = {}
+        rewards = {}
+        dones = {}
+        log_probs = {}
+        trajectory = []
 
-        actions = [torch.multinomial(action_prob, 1) for action_prob in action_probs]
+        # Initialize observations for all agents
+        public_obs = env.get_public_observation()
+        for agent_name in env.agents:
+            observations[agent_name] = {'public': public_obs, 'private': None}
+            rewards[agent_name] = 0
+            dones[agent_name] = False
+            log_probs[agent_name] = []
+
+        for step in range(max_steps):
+            actions = {}
+
+            # Employees select actions
+            for emp in env.employees:
+                if not dones[emp]:
+                    obs_vector = observation_to_vector(observations[emp]['public'])
+                    action_index, log_prob = agent.select_action(obs_vector)
+                    actions[emp] = OpenOrg.EMPLOYEE_ACTIONS[action_index]
+                    log_probs[emp].append(log_prob)
+                else:
+                    actions[emp] = None
+
+            # Moustapha Implement Manager Actions
+            actions[env.manager] = random.choice(OpenOrg.MANAGER_ACTIONS)
+            actions[env.manager] = 'balance'
+            #print(f"managerACtion={actions[env.manager]}")
+            # Environment step
+            next_observations, step_rewards, done = env.step(actions)
+
+            # Store trajectory for agent update
+            for emp in env.employees:
+                if not dones[emp]:
+                    next_obs_vector = observation_to_vector(next_observations[emp]['public'])
+                    reward = step_rewards[emp]
+                    trajectory.append((obs_vector, action_index, reward, next_obs_vector, done))
+
+            # Update observations and rewards
+            observations = next_observations
+            for agent_name in env.agents:
+                rewards[agent_name] += step_rewards[agent_name]
+                dones[agent_name] = done
+
+            if all(dones.values()):
+                break
+
+        # Update agent after each episode
+        agent.update(trajectory)
+
         
-        actions = [action.item() for action in actions]
-        next_public_obs, rewards, done, _ = env.step(actions)
-        next_private_obs = next_public_obs  # Assuming private_obs updates similarly
+        total_reward = sum(rewards.values())
+        print(f'Episode {episode}, Total Reward: {total_reward}')
+        print(f"actions={actions}")
+        ##Look at the losses of the encoder-decoder
+def observation_to_vector(observation):
+    """Converts observation to a one-hot encoded vector."""
+    vector = np.zeros(len(OpenOrg.OBSERVATIONS))
+    index = OpenOrg.OBSERVATIONS.index(observation)
+    vector[index] = 1
+    return vector
 
-        # Convert next observations to PyTorch tensors
-        next_public_obs = torch.tensor(next_public_obs, dtype=torch.float32)
-        next_private_obs = torch.tensor(next_private_obs, dtype=torch.float32)
+def action_to_one_hot(action_index):
+    """Converts action index to one-hot encoded vector."""
+    vector = np.zeros(len(OpenOrg.EMPLOYEE_ACTIONS))
+    vector[action_index] = 1
+    return vector
 
-        next_action_dist = [None] * num_agents
-        for i in range(num_agents):
-            value, next_obs_pred, next_action_dist_pred, new_hidden_state = critics[i](public_obs, private_obs, actions[i], action_dist[i], new_hidden_states[i])
-            hidden_states[i] = new_hidden_state
-
-            # Compute the LIA2C loss
-            loss = compute_loss(
-                observed_obs=next_public_obs,
-                predicted_obs=next_obs_pred,
-                observed_action_dist=action_dist[i],
-                predicted_action_dist=next_action_dist_pred,
-                alpha=alpha,
-                C=C
-            )
-
-            # Optimize the networks
-            actor_optimizers[i].zero_grad()
-            critic_optimizers[i].zero_grad()
-            loss.backward()
-            actor_optimizers[i].step()
-            critic_optimizers[i].step()
-
-        # Update observations and action distributions
-        public_obs, private_obs, action_dist = next_public_obs, next_private_obs, next_action_dist
+if __name__ == '__main__':
+    train_agent()
