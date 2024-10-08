@@ -2,8 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from nets import EncoderDecoderNetwork
-from nets import ActorCriticNetwork
+from ac_nets import EncoderDecoderNetwork
+from ac_nets import ActorCriticNetwork
 import OpenOrg
 import torch.nn.functional as F
 import distributions 
