@@ -80,7 +80,7 @@ def showfig(data_i,point1,point2,inside_TSR_intruder,inside_TSR_defender,inside_
   #   plt.scatter(Extract(outside_TSR_defender,0),Extract(outside_TSR_defender,0),c='g',label="outside_TSR_defender")
 
 
-  circle3 = plt.Circle(point1, 0.1, fill = False,color='green')
+  circle3 = plt.Circle(point1, 0.2, fill = False,color='green')
   plt.scatter(*point1,c="black",label="start")
   plt.scatter(*point2,c="black",label='start')
 
@@ -147,3 +147,6 @@ for i in range(start_episode, start_episode+5):
 # remember to close the object to ensure writing multiple plots
 if pdf:
   pdf.close()
+
+  #python visualizer.py logfile_State_att.csv ./att.pdf
+  #python visualizer.py logfile_State_def.csv ./def.pdf

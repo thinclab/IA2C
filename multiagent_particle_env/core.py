@@ -682,7 +682,7 @@ class World(object):
         dist = np.sqrt(np.sum(np.square(delta_pos)))
 
         # Minimum allowable distance
-        dist_min = agent_a.size + agent_b.size
+        dist_min = agent_a.size + agent_b.size + 0.04
 
         # Collision occurs is distance is less then the minimum allowable distance
         return True if dist < dist_min else False
