@@ -21,7 +21,7 @@ import numpy as np
 from torch.optim import Adam
 from torch.distributions import Categorical
 
-hidden_size = 6
+hidden_size = 20
 
 class NeuralNet(nn.Module):
     def __init__(self, state_dim, action_dim, b_actor=False):
@@ -76,7 +76,7 @@ class CriticNetwork:
         else:
             get_loss = loss.detach().numpy()
         self.losses.append(get_loss)
-        if len(self.losses)>20:
+        if len(self.losses)>100:
             del self.losses[0]
         self.critic_loss = np.mean(self.losses)
         
@@ -112,6 +112,7 @@ class ActorNetwork:
         return out
         
     def batch_update(self, obs, act, adv, retain=False):  # (N_S X N_E X N_F), (N_S X N_E X 1), (N_S X N_E X 1)
+        self.optimizer.zero_grad()
         dist = Categorical(probs=self.net.forward(obs))
         neglogp = - dist.log_prob(act.squeeze(-1)).unsqueeze(-1)
         pg_loss = adv * neglogp
@@ -124,6 +125,6 @@ class ActorNetwork:
         else:
             get_loss = loss.detach().numpy()
         self.losses.append(get_loss)
-        if len(self.losses)>20:
+        if len(self.losses)>100:
             del self.losses[0]
         self.actor_loss = np.mean(self.losses)

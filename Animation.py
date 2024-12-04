@@ -81,10 +81,10 @@ for i, (intruder, defender) in enumerate(zip(intruder_data, defender_data)):
             else:
                 intruder_marker.set_color('green')
 
-            if dist_defender_to_intruder <= 0.2:  # Defender in Intruder sensing range
-                defender_marker.set_color('blue')
+            if dist_defender_to_intruder <= 0.3:  # Defender in Intruder sensing range
+                defender_marker.set_color('pink')
             else:
-                defender_marker.set_color('orange')
+                defender_marker.set_color('red')
 
             # Update marker positions
             intruder_marker.set_data([intruder_pos[0]], [intruder_pos[1]])
