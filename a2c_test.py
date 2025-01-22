@@ -26,9 +26,9 @@ from random import randrange
 from Org import Org
 import matplotlib.pyplot as plt
 import random
-#from neptune import Run
+from neptune import Run
 from math import log
-#plt.switch_backend('agg')
+plt.switch_backend('agg')
 
 import os
 
@@ -37,19 +37,19 @@ if os.path.exists("my_secrets.py"):
 else:
     project, api_token = None, None
 
-'''run = True
+run = True
 
 if run:
     run = Run(
         project=project,
         api_token=api_token,
         tags=['no reset']
-    )'''
+    )
 
 
 GAMMA = 0.9
 NUM_AGENTS = 20
-NUM_EPISODES = 50000
+NUM_EPISODES = 2000#50000
 STEPS_PER_EPISODE = 30
 NOISE = 20
 DEBUG = False
@@ -66,7 +66,7 @@ actor_actions = 3
 exp_buff, reward_lst, pd_lst = [], [], []
 
 def generate_init_D():
-    random.seed(42)
+    #random.seed(32)
     a_self = random.randint(0, NUM_AGENTS)
     a_balance = random.randint(0, NUM_AGENTS - a_self)
     a_group = NUM_AGENTS - a_self - a_balance
@@ -80,10 +80,17 @@ for i in range(NUM_AGENTS):
     D.append(generate_init_D())
     exp_buff.append([])
 RT = [4,1,0]
-D = (0,0,0)
+
+'''a_self = random.randint(0, 20)
+a_balance = random.randint(0, 20 - a_self)
+a_group = 20 - a_self - a_balance
+
+D = (a_self,a_balance,a_group)'''
 
 joints = list(combinations_with_replacement("012", NUM_AGENTS))
 all_cf = []
+all_state = []
+
 
 for i in range(len(joints)):
         all_cf.append([0,0,0])
@@ -91,6 +98,8 @@ for i in range(len(joints)):
 for i in range(len(joints)):
     for j in range(len(joints[i])):
         all_cf[i][int(joints[i][j])]+= 1
+
+
 
 #return configuration index        
 def cf_to_index(cf):
@@ -162,16 +171,23 @@ for ep in range(NUM_EPISODES):
         ja.append(actor[i].sample_action( s ))
         
     cf = ja_to_cf(ja)
+    if run:
+        run[f"train/individual"].append(cf[0])
+        run[f"train/balance"].append(cf[1])
+        run[f"train/group"].append(cf[2])
 
     for step in range(STEPS_PER_EPISODE):
         s_, gr, done, info = env.step(cf) # make step in environment
         s_ = [s_] 
         ja_ = []
         r = []
+
         for i in range(NUM_AGENTS):
             ja_.append(actor[i].sample_action( s_ ))
             r.append(RT[ja[i]]+gr)
             ind_r = r[-1]
+            if run:
+                run[f'train/agent_{i}'].append(ind_r)
             #for graph plotting
             reward_buffer[i] += r[-1]
             all_state.append(s)
@@ -206,7 +222,7 @@ for ep in range(NUM_EPISODES):
         if done:
             break
 
-    dist = get_dist(pd)
+    #dist = get_dist(pd)
     x_vec, neuron_cf_vec, actor_adv_vec, critic_target_vec, neuron_sel_vec, Q_next = [], [], [], [], [], []
     for i in range(NUM_AGENTS):
         x_vec.append([])
@@ -249,6 +265,21 @@ for ep in range(NUM_EPISODES):
         exp_buff = reset_exp_buffer()
         pd_lst=[]
     print("Episode:" ,ep, "reward:", ep_r)
+
+plt.plot(reward_lst)
+plt.title('reward_lst')
+plt.savefig('reward')
+plt.close()
+
+plt.plot(all_state)
+plt.title('state')
+plt.savefig('state')
+
+
+if run:
+    run.sync()
+    run.stop()
+
 
            
         

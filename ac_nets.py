@@ -51,6 +51,7 @@ class CriticNetwork(nn.Module):
         target_vec = torch.tensor(target_vec).float()
         for _ in range(num_steps):
             q_values = self.forward(torch.tensor(x_vec).float())
+            #print(q_values.dim(), op_neuron_sel_vec.dim(), op_neuron_sel_vec.unsqueeze(-1).dim())
             q_selected = q_values.gather(1, op_neuron_sel_vec.unsqueeze(-1)).squeeze(-1)
             loss = self.loss_fn(q_selected, target_vec)
             self.optimizer.zero_grad()
