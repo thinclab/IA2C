@@ -2,7 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from numpy import dtype
-
+import torch.optim as optim
+LR = 0.000001
 
 class EncoderDecoderNetwork(nn.Module):
     def __init__(self, input_dim, latent_size, output_public_obs_dim, out_theta):
@@ -25,6 +26,13 @@ class EncoderDecoderNetwork(nn.Module):
             nn.Linear(128, out_theta),
             nn.Softmax(dim=-1)
         )
+        self.mse_lose = torch.nn.MSELoss()
+        self.kl_loss = torch.nn.KLDivLoss(reduction='batchmean')
+        self.optimizer_encdec = optim.Adam(list(self.encoder.parameters()) + 
+                                           list(self.decoder_observation.parameters())+ 
+                                            list(self.decoder_action_dist.parameters()), lr=0.001)
+
+
 
     def forward(self, public_obs, private_obs, action, theta):
         # Concatenate observation and action
@@ -41,5 +49,29 @@ class EncoderDecoderNetwork(nn.Module):
 
         return z, next_pub_obs, next_private_obs
 
-    def batch_update(self):
-        pass
+    def loss_calculator(self, pred_next_pub_obs, next_state, pred_act_config, true_act_config, alpha):
+        pred_next_pub_obs = torch.tensor(pred_next_pub_obs, dtype=torch.float32)
+        next_state = torch.tensor(next_state, dtype=torch.float32)
+        pred_act_config = torch.tensor(pred_act_config, dtype=torch.float32)
+        true_act_config = torch.tensor(true_act_config, dtype=torch.float32)
+        alpha = torch.tensor(alpha, dtype=torch.float32)
+        #first component
+        loss_obs = self.mse_lose(pred_next_pub_obs, next_state)
+        #second component
+        dirichlet_likelihood = torch.distributions.Dirichlet(alpha + true_act_config)
+
+        loss_theta = -dirichlet_likelihood.log_prob(pred_act_config)
+        #third component
+        dir_pred = torch.distributions.Dirichlet(pred_act_config)
+        dir_true = torch.distributions.Dirichlet(alpha + true_act_config)
+        loss_kl = torch.distributions.kl.kl_divergence(dir_pred, dir_true)
+
+        total_loss = loss_obs + loss_theta + loss_kl
+
+        return total_loss
+
+    def batch_update(self, pred_next_pub_obs, next_state, pred_act_config, true_act_config, alpha):
+        self.optimizer_encdec.zero_grad()
+        loss_endec = self.loss_calculator(pred_next_pub_obs, next_state, pred_act_config, true_act_config, alpha)
+        loss_endec.backward()
+        self.optimizer_encdec.step()
