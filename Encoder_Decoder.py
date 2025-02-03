@@ -50,23 +50,25 @@ class EncoderDecoderNetwork(nn.Module):
         return z, next_pub_obs, next_private_obs
 
     def loss_calculator(self, pred_next_pub_obs, next_state, pred_act_config, true_act_config, alpha):
-        pred_next_pub_obs = torch.tensor(pred_next_pub_obs, dtype=torch.float32)
-        next_state = torch.tensor(next_state, dtype=torch.float32)
-        pred_act_config = torch.tensor(pred_act_config, dtype=torch.float32)
-        true_act_config = torch.tensor(true_act_config, dtype=torch.float32)
+        pred_next_pub_obs = torch.tensor(pred_next_pub_obs, dtype=torch.float32, requires_grad=True)
+        next_state = torch.tensor(next_state, dtype=torch.float32, requires_grad=True)
+        pred_act_config = torch.tensor(pred_act_config, dtype=torch.float32, requires_grad=True)
+        true_act_config = torch.tensor(true_act_config, dtype=torch.float32, requires_grad=True)
         alpha = torch.tensor(alpha, dtype=torch.float32)
         #first component
         loss_obs = self.mse_lose(pred_next_pub_obs, next_state)
         #second component
-        dirichlet_likelihood = torch.distributions.Dirichlet(alpha + true_act_config)
+        norm_alpha_true_ac = torch.softmax(alpha + true_act_config, dim=-1)
+        dirichlet_likelihood = torch.distributions.Dirichlet(norm_alpha_true_ac)
 
-        loss_theta = -dirichlet_likelihood.log_prob(pred_act_config)
+        norm_pred_act_onfig = torch.softmax(pred_act_config, dim=-1)
+        loss_theta = -dirichlet_likelihood.log_prob(norm_pred_act_onfig)
         #third component
-        dir_pred = torch.distributions.Dirichlet(pred_act_config)
-        dir_true = torch.distributions.Dirichlet(alpha + true_act_config)
+        dir_pred = torch.distributions.Dirichlet(norm_pred_act_onfig)
+        dir_true = torch.distributions.Dirichlet(norm_alpha_true_ac)
         loss_kl = torch.distributions.kl.kl_divergence(dir_pred, dir_true)
 
-        total_loss = loss_obs + loss_theta + loss_kl
+        total_loss = (loss_obs + loss_theta + loss_kl).mean()
 
         return total_loss
 
