@@ -33,7 +33,7 @@ if run:
 
 GAMMA = 0.9
 NUM_AGENTS = 20
-NUM_EPISODES = 2000#50000
+NUM_EPISODES = 20000#50000
 STEPS_PER_EPISODE = 30
 NOISE = 20
 DEBUG = False
@@ -47,7 +47,7 @@ for i in range(2,NUM_AGENTS):
 n_features = 1
 actor_actions = 3
 
-exp_buff, reward_lst, pd_lst = [], [], []
+exp_buff, reward_lst, pd_lst, ep_r_lst = [], [], [], []
 
 def generate_init_D():
     #random.seed(32)
@@ -298,10 +298,11 @@ for ep in range(NUM_EPISODES):
                 true_act_config[i].append(true_next_act_config)
                 alpha_vec[i].append(alpha)
         for i in range(NUM_AGENTS):
-            encoder_decoder[i].batch_update(pred_next_pub_obs[i], next_state[i], pred_act_config[i], true_act_config[i], alpha[i])
+            encoder_decoder[i].batch_update(pred_next_pub_obs[i], next_state[i], pred_act_config[i], true_act_config[i], alpha_vec[i])
 
         exp_buff = reset_exp_buffer()
         pd_lst=[]
+    ep_r_lst.append(ep_r)
     print("Episode:" ,ep, "reward:", ep_r)
 
 plt.plot(reward_lst)
@@ -312,7 +313,7 @@ plt.close()
 plt.plot(all_state)
 plt.title('state')
 plt.savefig('state')
-
+np.savetxt('ep_r.csv',ep_r_lst,delimiter=',')
 
 if run:
     run.sync()

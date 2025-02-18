@@ -59,14 +59,21 @@ class EncoderDecoderNetwork(nn.Module):
         loss_obs = self.mse_lose(pred_next_pub_obs, next_state)
         #second component
         norm_alpha_true_ac = torch.softmax(alpha + true_act_config, dim=-1)
+        norm_alpha_true_ac = torch.clamp(norm_alpha_true_ac, min=1e-6) 
         dirichlet_likelihood = torch.distributions.Dirichlet(norm_alpha_true_ac)
 
-        norm_pred_act_onfig = torch.softmax(pred_act_config, dim=-1)
-        loss_theta = -dirichlet_likelihood.log_prob(norm_pred_act_onfig)
+        norm_pred_act_config = torch.softmax(pred_act_config, dim=-1)
+        #norm_pred_act_config = torch.clamp(norm_pred_act_config, min=1e-6)
+        norm_pred_act_config = norm_pred_act_config + 1e-6
+        norm_pred_act_config = norm_pred_act_config / norm_pred_act_config.sum(dim=-1, keepdim=True)  # Re-normalize
+        loss_theta = -dirichlet_likelihood.log_prob(norm_pred_act_config).mean()
         #third component
-        dir_pred = torch.distributions.Dirichlet(norm_pred_act_onfig)
+        dir_pred = torch.distributions.Dirichlet(norm_pred_act_config)
         dir_true = torch.distributions.Dirichlet(norm_alpha_true_ac)
-        loss_kl = torch.distributions.kl.kl_divergence(dir_pred, dir_true)
+        #dir_pred = torch.clamp(dir_pred, min=1e-6)
+        #dir_true = torch.clamp(dir_true, min=1e-6)
+
+        loss_kl = torch.distributions.kl.kl_divergence(dir_pred, dir_true).mean()
 
         total_loss = (loss_obs + loss_theta + loss_kl).mean()
 
