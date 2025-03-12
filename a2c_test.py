@@ -1,6 +1,8 @@
 import numpy as np
 import scipy as sp
 import gymnasium as gym
+import torch
+
 from ac_nets import *
 from itertools import combinations_with_replacement
 from Encoder_Decoder import EncoderDecoderNetwork
@@ -33,10 +35,11 @@ if run:
 
 GAMMA = 0.9
 NUM_AGENTS = 20
-NUM_EPISODES = 20000#50000
+NUM_EPISODES = 1000#50000
 STEPS_PER_EPISODE = 30
 NOISE = 20
 DEBUG = False
+Save_path = os.path.join(os.getcwd(), "Actors/1000e")
 
 critic_actions = 6
 count = 4
@@ -245,7 +248,7 @@ for ep in range(NUM_EPISODES):
 
     #dist = get_dist(pd)
     #for actor, critic update
-    x_vec, neuron_cf_vec, actor_adv_vec, critic_target_vec, neuron_sel_vec, Q_next = [], [], [], [], [], []
+    x_vec, neuron_cf_vec, actor_adv_vec, critic_target_vec, neuron_sel_vec, Q_next, z_vec = [], [], [], [], [], [], []
     #for decoder-encoder update
     pred_next_pub_obs, next_state, pred_act_config, true_act_config, alpha_vec = [], [], [], [], []
     for i in range(NUM_AGENTS):
@@ -260,27 +263,28 @@ for ep in range(NUM_EPISODES):
         pred_act_config.append([])
         true_act_config.append([])
         alpha_vec.append([])
+        z_vec.append([])
 
-    if ep % 10 == 0:
+    if ep % 10 == 0 and ep != 0:
         #Critic Update
         for i in range(NUM_AGENTS):
             #private obs, public obs, action config, z, z', next private obs, next public obs, true_next_pub_obs, true next action config, dirichlet parameter
-            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in exp_buff[i]:
+            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in exp_buff[i][-300:]:
                 x_vec[i].append(public_obs)
                 neuron_sel_vec[i].append(act_config)
-                Q_next[i] = critic[i].run_main( next_public_obs )[act_config]
+                Q_next[i] = critic[i].run_main( next_public_obs, z)[act_config]
                 critic_target_vec[i].append( reward + GAMMA * Q_next[i] )
                 neuron_cf_vec[i].append( cf_to_index(next_private_obs) )
-
+                z_vec[i].append(z)
         for i in range(NUM_AGENTS):
-            critic[i].batch_update( x_vec[i], neuron_cf_vec[i], critic_target_vec[i] )
+            critic[i].batch_update( x_vec[i], neuron_cf_vec[i], critic_target_vec[i], z_vec[i])
 
         #Actor Update
         for i in range(NUM_AGENTS):
             #for (state, action, configuration, rewards, next_state, next_action, next_configuration) in exp_buff[i]:
-            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in exp_buff[i]:
+            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in exp_buff[i][-300:]:
 
-                Q = critic[i].run_main( public_obs )
+                Q = critic[i].run_main( public_obs, z )
                 Q_cur = Q[act_config]
                 dist = get_dist(pd_lst[i])
                 V = np.dot( Q, dist )
@@ -292,7 +296,7 @@ for ep in range(NUM_EPISODES):
         #encoder-decoder update
         for i in range(NUM_AGENTS):
             for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in exp_buff[i]:
-                pred_next_pub_obs[i].append(private_obs)
+                pred_next_pub_obs[i].append(next_public_obs)
                 next_state[i].append(true_next_pub_obs)
                 pred_act_config[i].append(next_private_obs)
                 true_act_config[i].append(true_next_act_config)
@@ -305,6 +309,9 @@ for ep in range(NUM_EPISODES):
     ep_r_lst.append(ep_r)
     print("Episode:" ,ep, "reward:", ep_r)
 
+
+for i in range(NUM_AGENTS):
+    torch.save(actor[i].state_dict(), os.path.join(Save_path, 'actor'+str(i)))
 plt.plot(reward_lst)
 plt.title('reward_lst')
 plt.savefig('reward')

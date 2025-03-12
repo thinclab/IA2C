@@ -30,7 +30,7 @@ class EncoderDecoderNetwork(nn.Module):
         self.kl_loss = torch.nn.KLDivLoss(reduction='batchmean')
         self.optimizer_encdec = optim.Adam(list(self.encoder.parameters()) + 
                                            list(self.decoder_observation.parameters())+ 
-                                            list(self.decoder_action_dist.parameters()), lr=0.001)
+                                            list(self.decoder_action_dist.parameters()), lr=0.0001)
 
 
 
@@ -50,12 +50,14 @@ class EncoderDecoderNetwork(nn.Module):
         return z, next_pub_obs, next_private_obs
 
     def loss_calculator(self, pred_next_pub_obs, next_state, pred_act_config, true_act_config, alpha):
-        pred_next_pub_obs = torch.tensor(pred_next_pub_obs, dtype=torch.float32, requires_grad=True)
+        #f_d_o(z)
+        pred_next_pub_obs = torch.tensor(pred_next_pub_obs, dtype=torch.float32, requires_grad=True).unsqueeze(1)
         next_state = torch.tensor(next_state, dtype=torch.float32, requires_grad=True)
         pred_act_config = torch.tensor(pred_act_config, dtype=torch.float32, requires_grad=True)
         true_act_config = torch.tensor(true_act_config, dtype=torch.float32, requires_grad=True)
         alpha = torch.tensor(alpha, dtype=torch.float32)
         #first component
+        #print(pred_next_pub_obs.shape, next_state.shape)
         loss_obs = self.mse_lose(pred_next_pub_obs, next_state)
         #second component
         norm_alpha_true_ac = torch.softmax(alpha + true_act_config, dim=-1)
@@ -70,8 +72,6 @@ class EncoderDecoderNetwork(nn.Module):
         #third component
         dir_pred = torch.distributions.Dirichlet(norm_pred_act_config)
         dir_true = torch.distributions.Dirichlet(norm_alpha_true_ac)
-        #dir_pred = torch.clamp(dir_pred, min=1e-6)
-        #dir_true = torch.clamp(dir_true, min=1e-6)
 
         loss_kl = torch.distributions.kl.kl_divergence(dir_pred, dir_true).mean()
 
