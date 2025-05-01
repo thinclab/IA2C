@@ -1,3 +1,5 @@
+import random
+
 import gymnasium as gym
 from gymnasium import error, spaces, utils
 from gymnasium.utils import seeding

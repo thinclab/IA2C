@@ -2,6 +2,7 @@ import numpy as np
 import scipy as sp
 import gymnasium as gym
 import torch
+from numpy.lib.format import BUFFER_SIZE
 
 from ac_nets import *
 from itertools import combinations_with_replacement
@@ -34,13 +35,15 @@ if run:
 
 
 GAMMA = 0.9
-NUM_AGENTS = 20
-NUM_EPISODES = 1000#50000
+NUM_AGENTS = 30
+NUM_EPISODES = 165000#50000
 STEPS_PER_EPISODE = 30
 NOISE = 20
+BATCH_SIZE = 32
 DEBUG = False
-Save_path = os.path.join(os.getcwd(), "Actors/1000e")
-
+BUFFER_SIZE = 32
+Save_path = os.path.join(os.getcwd(), "Actors/165000e_KLD_500bufferSize")
+test = True
 critic_actions = 6
 count = 4
 env = Org()
@@ -50,7 +53,13 @@ for i in range(2,NUM_AGENTS):
 n_features = 1
 actor_actions = 3
 
-exp_buff, reward_lst, pd_lst, ep_r_lst = [], [], [], []
+seed = random.randint(0, 10000)
+np.random.seed(seed)
+random.seed(seed)
+torch.manual_seed(seed)
+
+
+exp_buff, reward_lst, pd_lst, ep_r_lst, step_r_list= [], [], [], [], []
 
 def generate_init_D():
     #random.seed(32)
@@ -122,9 +131,12 @@ def add_noise(action, noise):
     return obs
 
 def reset_exp_buffer():
-    exp_buffer = []
+    exp_buffer = [[] for i in range(NUM_AGENTS)]
     for i in range(NUM_AGENTS):
-        exp_buffer.append([])
+        if len(exp_buff[0]) > BUFFER_SIZE:
+            exp_buffer[i] = exp_buff[i][-BUFFER_SIZE:]
+        else:
+            exp_buffer[i] = exp_buff[i].copy()
     return exp_buffer
 #get configuration distribution from current Dirichlet distribution
 def get_dist(dist):
@@ -170,7 +182,7 @@ for i in range(NUM_AGENTS):
 
 for i in range(NUM_AGENTS):
     #public obs size+ private obs size+ self chosen action size + len(joints)
-    encoder_decoder[i] = EncoderDecoderNetwork(1 + 3 + 1 + len(joints), 16, 1, len(joints))
+    encoder_decoder[i] = EncoderDecoderNetwork(1 + 3 + 1 + len(joints), 32, 1, len(joints))
 
 for ep in range(NUM_EPISODES):
     s, _, _, _ = env.reset()
@@ -236,13 +248,16 @@ for ep in range(NUM_EPISODES):
             denoised_private_obs_, _= Dirchlet_denoise(D[i], noised_obs_, False)
             z, next_pub_obs, next_theta = encoder_decoder[i].forward(s, denoised_private_obs, ja[i], theta[i][-1])
             z_, next_pub_obs_, next_theta_ = encoder_decoder[i].forward(s_, denoised_private_obs_, ja_[i], next_theta)
+            z = z.detach().cpu().clone()
+            z_ = z_.detach().cpu().clone()
             #private obs, public obs, action config, z, z', next private obs, next public obs, true private obs, alpha
+
             exp_buff[i].append([denoised_private_obs, s, ja[i], z, z_ , ind_r, denoised_private_obs_, next_pub_obs, s_, cf_, alpha])
 
+        step_r_list.append(sum(r))
         reward_lst.append(r)
         ep_r += sum(r)
         s, ja, cf = s_, ja_, cf_
-
         if done:
             break
 
@@ -267,9 +282,17 @@ for ep in range(NUM_EPISODES):
 
     if ep % 10 == 0 and ep != 0:
         #Critic Update
+        sample_batch_ind = random.sample(range(len(exp_buff[0])), BATCH_SIZE)
+        #sample_batch_ind = [i for i in range(32)]
+        sample_batch = [[] for _ in range(len(exp_buff))]
+        for i in range(len(sample_batch_ind)):
+            for j in range(len(sample_batch)):
+                sample_batch[j].append(exp_buff[j][i])
+
         for i in range(NUM_AGENTS):
             #private obs, public obs, action config, z, z', next private obs, next public obs, true_next_pub_obs, true next action config, dirichlet parameter
-            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in exp_buff[i][-300:]:
+            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in sample_batch[i]:
+
                 x_vec[i].append(public_obs)
                 neuron_sel_vec[i].append(act_config)
                 Q_next[i] = critic[i].run_main( next_public_obs, z)[act_config]
@@ -282,7 +305,7 @@ for ep in range(NUM_EPISODES):
         #Actor Update
         for i in range(NUM_AGENTS):
             #for (state, action, configuration, rewards, next_state, next_action, next_configuration) in exp_buff[i]:
-            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in exp_buff[i][-300:]:
+            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in sample_batch[i]:
 
                 Q = critic[i].run_main( public_obs, z )
                 Q_cur = Q[act_config]
@@ -295,7 +318,7 @@ for ep in range(NUM_EPISODES):
 
         #encoder-decoder update
         for i in range(NUM_AGENTS):
-            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in exp_buff[i]:
+            for (private_obs, public_obs, act_config, z, z_, reward, next_private_obs, next_public_obs, true_next_pub_obs, true_next_act_config, alpha) in sample_batch[i]:
                 pred_next_pub_obs[i].append(next_public_obs)
                 next_state[i].append(true_next_pub_obs)
                 pred_act_config[i].append(next_private_obs)
@@ -303,6 +326,7 @@ for ep in range(NUM_EPISODES):
                 alpha_vec[i].append(alpha)
         for i in range(NUM_AGENTS):
             encoder_decoder[i].batch_update(pred_next_pub_obs[i], next_state[i], pred_act_config[i], true_act_config[i], alpha_vec[i])
+
 
         exp_buff = reset_exp_buffer()
         pd_lst=[]
@@ -320,8 +344,8 @@ plt.close()
 plt.plot(all_state)
 plt.title('state')
 plt.savefig('state')
-np.savetxt('ep_r.csv',ep_r_lst,delimiter=',')
-
+np.savetxt('ep_r_LIA2C_KLD_165000.csv',ep_r_lst,delimiter=',')
+np.savetxt('step_r_LIA2C_KLD_165000.csv', step_r_list, delimiter=',')
 if run:
     run.sync()
     run.stop()

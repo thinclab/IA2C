@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 from numpy import dtype
 import torch.optim as optim
-LR = 0.000001
-
+LR = 0.0003
+without_KLD = False
 class EncoderDecoderNetwork(nn.Module):
     def __init__(self, input_dim, latent_size, output_public_obs_dim, out_theta):
         super(EncoderDecoderNetwork, self).__init__()
@@ -30,7 +30,7 @@ class EncoderDecoderNetwork(nn.Module):
         self.kl_loss = torch.nn.KLDivLoss(reduction='batchmean')
         self.optimizer_encdec = optim.Adam(list(self.encoder.parameters()) + 
                                            list(self.decoder_observation.parameters())+ 
-                                            list(self.decoder_action_dist.parameters()), lr=0.0001)
+                                            list(self.decoder_action_dist.parameters()), lr=LR)
 
 
 
@@ -51,6 +51,7 @@ class EncoderDecoderNetwork(nn.Module):
 
     def loss_calculator(self, pred_next_pub_obs, next_state, pred_act_config, true_act_config, alpha):
         #f_d_o(z)
+        total_loss = None
         pred_next_pub_obs = torch.tensor(pred_next_pub_obs, dtype=torch.float32, requires_grad=True).unsqueeze(1)
         next_state = torch.tensor(next_state, dtype=torch.float32, requires_grad=True)
         pred_act_config = torch.tensor(pred_act_config, dtype=torch.float32, requires_grad=True)
@@ -75,7 +76,10 @@ class EncoderDecoderNetwork(nn.Module):
 
         loss_kl = torch.distributions.kl.kl_divergence(dir_pred, dir_true).mean()
 
-        total_loss = (loss_obs + loss_theta + loss_kl).mean()
+        if without_KLD == True:
+            total_loss = (loss_obs + loss_theta).mean()
+        else:
+            total_loss = (loss_obs + loss_theta + loss_kl).mean()
 
         return total_loss
 

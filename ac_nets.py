@@ -7,7 +7,7 @@ import gymnasium as gym
 from gymnasium.spaces import Discrete
 
 BETA = 0.001  # Exploration
-LR_A = 0.0001#0.000001  # (slower) learning rate for actor
+LR_A = 0.000001#0.000001  # (slower) learning rate for actor
 LR_C = 0.00001
 
 
@@ -47,21 +47,30 @@ class CriticNetwork(nn.Module):
         self.target_critic.load_state_dict(self.main_critic.state_dict())
 
     def batch_update(self, x_vec, op_neuron_sel_vec, target_vec, z_vec):
-        num_steps = 10
-        op_neuron_sel_vec = torch.tensor(op_neuron_sel_vec)
-        target_vec = torch.tensor(target_vec).float()
-        x_vec = torch.tensor(x_vec).float()
-        z_vec = torch.stack(z_vec)
+        op_neuron_sel_vec = torch.tensor(op_neuron_sel_vec).detach()
+        target_vec = torch.tensor(target_vec).float().detach()
+        x_vec = torch.tensor(x_vec).float().detach()
+        z_vec = torch.stack(z_vec).detach()
+
         #print(x_vec.shape, z_vec.shape)
         #for _ in range(num_steps):
         state = torch.cat([x_vec,z_vec], dim=-1)
-        state = torch.reshape(state,[5100,1])
+        state = torch.reshape(state,[1056,1])
 
         q_values = self.forward(state)
+        '''if q_values.requires_grad == True:
+            print('q_value have gradient')'''
         #print(q_values.dim(), op_neuron_sel_vec.dim(), op_neuron_sel_vec.unsqueeze(-1).dim())
         q_selected = q_values.gather(1, op_neuron_sel_vec.unsqueeze(-1)).squeeze(-1)
+        '''if q_selected.requires_grad == True:
+            print('q_selected have gradient1')'''
         loss = self.loss_fn(q_selected, target_vec)
+        '''if q_selected.requires_grad == True:
+            print('q_selected have gradient2')'''
+
         self.optimizer.zero_grad()
+        '''if q_selected.requires_grad == True:
+            print('q_selected have gradient3')'''
         loss.backward()
         self.optimizer.step()
         self.loss_vec.append(loss.item())
@@ -69,9 +78,9 @@ class CriticNetwork(nn.Module):
 
     def run_main(self, state, z):
         state = torch.FloatTensor(state).unsqueeze(0)
-        z = torch.reshape(z,[1,16])
+        z = torch.reshape(z,[1,32])
         state = torch.cat([state, z], dim=-1)
-        state = torch.reshape(state, [17, 1])
+        state = torch.reshape(state, [33, 1])
 
         return self.forward(state).detach().numpy()[0]
 
