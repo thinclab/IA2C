@@ -36,7 +36,7 @@ if run:
 
 GAMMA = 0.9
 NUM_AGENTS = 30
-NUM_EPISODES = 165000#50000
+NUM_EPISODES = 250000#50000
 STEPS_PER_EPISODE = 30
 NOISE = 20
 BATCH_SIZE = 32
@@ -285,9 +285,8 @@ for ep in range(NUM_EPISODES):
         sample_batch_ind = random.sample(range(len(exp_buff[0])), BATCH_SIZE)
         #sample_batch_ind = [i for i in range(32)]
         sample_batch = [[] for _ in range(len(exp_buff))]
-        for i in range(len(sample_batch_ind)):
-            for j in range(len(sample_batch)):
-                sample_batch[j].append(exp_buff[j][i])
+        for i in range(len(sample_batch)):
+            sample_batch[i] = [exp_buff[i][j] for j in sample_batch_ind]
 
         for i in range(NUM_AGENTS):
             #private obs, public obs, action config, z, z', next private obs, next public obs, true_next_pub_obs, true next action config, dirichlet parameter
@@ -344,8 +343,8 @@ plt.close()
 plt.plot(all_state)
 plt.title('state')
 plt.savefig('state')
-np.savetxt('ep_r_LIA2C_KLD_165000.csv',ep_r_lst,delimiter=',')
-np.savetxt('step_r_LIA2C_KLD_165000.csv', step_r_list, delimiter=',')
+np.savetxt('ep_r_LIA2C_KLD_250000.csv',ep_r_lst,delimiter=',')
+np.savetxt('step_r_LIA2C_KLD_250000.csv', step_r_list, delimiter=',')
 if run:
     run.sync()
     run.stop()
