@@ -38,23 +38,27 @@ for i, (intruder, defender) in enumerate(zip(intruder_data, defender_data)):
     fig, ax = plt.subplots(figsize=(6, 6))  # Adjust size as needed
 
     # Configure the plot
-    ax.set_xlim(-1, 1)  # Adjust based on your data
-    ax.set_ylim(-1, 1)  # Adjust based on your data
+    low_bound = -1.2
+    high_bound = 1.2
+    ax.set_xlim(low_bound, high_bound)  # Adjust based on map size
+    ax.set_ylim(low_bound, high_bound)  # Adjust based on map size
     ax.grid(True)
     ax.set_title(f"Episode {i} Animation")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
-
+    HVT_Sensing_region = 0.35
+    Intruder_Sensing_region = 0.1
+    HVT_size = 0.55
     # Add static circles
-    ax.add_patch(Circle((0, 0), 0.106, fill=False, color='red', linestyle='--'))
-    ax.add_patch(Circle((0, 0), 0.5, fill=False, color='blue', linestyle='--'))
+    ax.add_patch(Circle((0, 0), HVT_size, fill=False, color='red', linestyle='--'))
+    ax.add_patch(Circle((0, 0), HVT_Sensing_region + HVT_size, fill=False, color='blue', linestyle='--'))
 
     # Initialize empty lines for animation
     line1, = ax.plot([], [], color='green', label="Intruder")
     line2, = ax.plot([], [], color='orange', label="Defender")
-    Intruder_sensing = Circle((0, 0), 0.3, color='green', fill=False)  # Small circle
-    intruder_marker, = ax.plot([], [], 'o', color='red', markersize=8, label="Intruder")
-    defender_marker, = ax.plot([], [], 'o', color='blue', markersize=8, label="Defender")
+    Intruder_sensing = Circle((0, 0), Intruder_Sensing_region, color='green', fill=False)  # Intruder sensing range
+    intruder_marker, = ax.plot([], [], 'o', color='red', markersize=5)
+    defender_marker, = ax.plot([], [], 'o', color='blue', markersize=5)
     ax.add_patch(Intruder_sensing)
 
     ax.legend()
@@ -100,7 +104,7 @@ for i, (intruder, defender) in enumerate(zip(intruder_data, defender_data)):
 
     # Save the animation as a GIF
     output_file = f"episode_{i}.gif"
-    ani.save(output_file, writer=animation.PillowWriter(fps=10))
+    ani.save(output_file, writer=animation.PillowWriter(fps=5))
     print(f"Animation for Episode {i} saved as {output_file}")
 
     # Close the figure to free memory
