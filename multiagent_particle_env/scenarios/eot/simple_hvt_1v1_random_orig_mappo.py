@@ -25,6 +25,14 @@ __email__ = 'rolando.fernandez1.civ@army.mil'
 __status__ = 'Dev'
 import random
 
+#declare global variable
+ATT_Sensing_region = 0.3
+HVT_Size = 0.1
+HVT_Sensing_region = 0.5
+V = 0.7
+Speed_Factor = 0.5
+Map_Size = 1
+
 class Scenario(BaseScenario):
     """
     Define the world, reward, and observations for the scenario.
@@ -33,6 +41,7 @@ class Scenario(BaseScenario):
     def __init__(self):
         # Debug verbose output
         self.debug = False
+
 
     def make_world(self): #, args): BiB: args not used
         """
@@ -49,7 +58,7 @@ class Scenario(BaseScenario):
         world.dimension_communication = 2
         world.log_headers = ["Agent_Type", "Fixed", "Perturbed", "X", "Y", "dX", "dY", "fX", "fY", "Collision"]
         world.map_size = 1
-        world.provide_global_obs = False
+        world.provide_global_obs = True
         # Defender and Attacker
         num_agents = 2
 
@@ -61,7 +70,7 @@ class Scenario(BaseScenario):
         num_agents = 2
         action_dim = 5
         local_obs_dim = 12
-        global_obs_dim = 15  # besides local obs, add another agents relative location and speed
+        global_obs_dim = 16  # besides local obs, add another agents relative location and speed
         total_action_dim = action_dim * action_dim  # Since there are two agents, possible joint actions could be 25
         device = 'cpu' if not CUDA else 'cuda'
         for agent_id in range(num_agents):
@@ -95,13 +104,13 @@ class Scenario(BaseScenario):
         '''
         #---------------------BiB------------------------
         attacker_size = size #1/160
-        attacker_sense_region_size = 0.1#size * (4 / factor) #1/10
+        attacker_sense_region_size = ATT_Sensing_region#size * (4 / factor) #1/10
 
         defender_size = size
         defender_sense_region_size = size * (4 / factor) #1/10
 
-        hvt_size = 0.2#size + defender_sense_region_size #17/160
-        hvt_sensing_region = 0.15
+        hvt_size = HVT_Size#size + defender_sense_region_size #17/160
+        hvt_sensing_region = HVT_Sensing_region
         hvt_sense_region_size = hvt_size + hvt_sensing_region#size * (20 / factor) #
 
 
@@ -119,7 +128,7 @@ class Scenario(BaseScenario):
         world.agents[0].silent = True
         world.agents[0].sense_region = attacker_sense_region_size 
         world.agents[0].size = 0.04#attacker_size
-        world.agents[0].max_speed = 0.425
+        world.agents[0].max_speed = Speed_Factor * V
 
         # Defender
         # Sense region for defender is 20% smaller because
@@ -133,7 +142,7 @@ class Scenario(BaseScenario):
         world.agents[1].silent = True
         world.agents[1].sense_region = defender_sense_region_size
         world.agents[1].size = 0.04#defender_size
-        world.agents[1].max_speed = 0.5
+        world.agents[1].max_speed = Speed_Factor
 
         # Add landmarks
         world.landmarks = [Landmark() for i in range(num_landmarks)]
@@ -183,8 +192,8 @@ class Scenario(BaseScenario):
         1: defender randomly generate outside HVT but inside HVT sensing range
         2: defender randomly generate inside HVT sening range
         '''
-        HVT_size = 0.2
-        sensing_range = 0.15
+        HVT_size = HVT_Size
+        sensing_range = HVT_Sensing_region
         HVT_sensing_range = HVT_size + sensing_range
         low_bound = -HVT_size #HVT size
         high_bound = HVT_size
@@ -208,8 +217,8 @@ class Scenario(BaseScenario):
             return [pos_x, pos_y]
 
     def random_agents_with_constrain_intruer(self):
-        HVT_size = 0.2
-        sensing_range = 0.15
+        HVT_size = HVT_Size
+        sensing_range = HVT_Sensing_region
         HVT_sensing_range = HVT_size + sensing_range + 0.1
         rng = random.Random()
         #rng.seed(42)
@@ -224,16 +233,14 @@ class Scenario(BaseScenario):
 
         def outside_HVT():
             #intruder pos initial
-            low_bound = -1#map max size
-            high_bound = 1
-            pos_x = 0
-            pos_y = np.random.uniform(low_bound, high_bound)
-            if rng.randint(0, 1) == 0:
-                pos_x = rng.uniform(low_bound, -1*HVT_sensing_range)
-            else:
-                pos_x = rng.uniform(HVT_sensing_range, high_bound)
-            while (pos_x*pos_x + pos_y*pos_y) <= pow(HVT_sensing_range, 2) or (pos_x*pos_x + pos_y*pos_y) >= pow(high_bound, 2):
-                pos_y = rng.uniform(low_bound, high_bound)
+            low_bound = -Map_Size#map max size
+            high_bound = Map_Size
+            pos_x, pos_y = 0,0
+            dist_sq = (pos_x)**2 + (pos_y)**2
+            while dist_sq < HVT_sensing_range**2:
+                pos_x = np.random.uniform(low_bound, high_bound)
+                pos_y = np.random.uniform(low_bound, high_bound)
+                dist_sq = (pos_x)**2 + (pos_y)**2
 
             return [pos_x, pos_y]
         '''if random.random() > 0.5:
@@ -356,7 +363,7 @@ class Scenario(BaseScenario):
                     HVT_radius = hvt.sense_region + hvt.size
                     relative_pos = agent.state.p_pos - intruder.state.p_pos
                     cur_dist = pow(relative_pos[0] * relative_pos[0] + relative_pos[1] * relative_pos[1], 1/2)
-                    shape_r = (HVT_radius * 2 - cur_dist) / (HVT_radius * 2) * 2
+                    shape_r = (HVT_radius - cur_dist) / (HVT_radius) * 0.2
                     #shape_r += HVT_radius/(cur_dist + HVT_radius) * 2
                     '''else:
                         reward -= 0.2
@@ -417,9 +424,9 @@ class Scenario(BaseScenario):
                 if world.in_sense_region(agent, hvt):
                     hvt_pos = hvt.state.p_pos - agent.state.p_pos
                     dist = np.sqrt(np.sum(np.square(hvt_pos))) - hvt.size - agent.size#pow(hvt_pos[0] * hvt_pos[0] + hvt_pos[1] * hvt_pos[1], 1/2)
-                    shape_r = (agent.sense_region - dist)/(agent.sense_region) * 2
-                #else:
-                #    step_r -= 0
+                    shape_r = (agent.sense_region - dist)/(agent.sense_region) * 0.2
+                else:
+                    step_r -= 0.1
 
 
 
@@ -455,142 +462,67 @@ class Scenario(BaseScenario):
         """
         adversaries = self.adversaries(world)
         # Get global obs when HVT sense Attacker and Attacker sense HVT and Defender
-        global_obs = None
+        obs = []
+        dummy_init = [999, 999]
+        defender_pos = dummy_init
+        attacker_pos = dummy_init
+        landmark_pos_def = dummy_init
+        landmark_pos_adv = dummy_init
+        defender_pos_adv = dummy_init
+        attacker_pos_def = dummy_init
+        attacker_vel = dummy_init
+        defender_vel = dummy_init
         if world.provide_global_obs == True:
             Defender = self.good_agents(world)[0]
-            Attker = adversaries[0]
+            Intruder = adversaries[0]
             for landmark in world.landmarks:
                 if not landmark.boundary:
-                    if world.in_sense_region(Attker, Defender) and world.in_sense_region(Attker, landmark):
+                    # when intruder can sense both HVT and defender, intruder access HVT sensing range and can be sensed
+                    # by defender, provide both agent global info
+                    if world.in_sense_region(Intruder, Defender) and world.in_sense_region(Intruder, landmark):
                         # each agent pos
                         defender_pos = Defender.state.p_pos
-                        attacker_pos = Attker.state.p_pos
+                        attacker_pos = Intruder.state.p_pos
                         # position between HVT and two agents
-                        landmark_pos_def = landmark.state.p_pos - Defender.state.pos
-                        landmark_pos_adv = landmark.state.p_pos - Attker.state.pos
+                        landmark_pos_def = landmark.state.p_pos - Defender.state.p_pos
+                        landmark_pos_adv = landmark.state.p_pos - Intruder.state.p_pos
                         # position between attacker and Defender
-                        defender_pos_adv = Defender.state.p_pos - Attker.state.p_pos
-                        attacker_pos_def = Attker.state.p_pos - Defender.state.p_pos
+                        defender_pos_adv = Defender.state.p_pos - Intruder.state.p_pos
+                        attacker_pos_def = Intruder.state.p_pos - Defender.state.p_pos
                         # velocity of each agent
-                        attacker_vel = Attker.state.p_vel
+                        attacker_vel = Intruder.state.p_vel
                         defender_vel = Defender.state.p_vel
-                        global_obs = np.concatenate([defender_pos] + [attacker_pos] + [landmark_pos_def] + [landmark_pos_adv] +
-                                              [defender_pos_adv] + [attacker_pos_def] + [attacker_vel] + [defender_vel])
-
-
-
-
-
-        # Get positions of HVT in this agent's reference frame
-        landmarks_pos = []
-        hvt_sense_pos = []
-        hvt_sense_vel = []
-        other_pos = []
-        other_vel = []
-        global_obs = []
-        for landmark in world.landmarks:
-            if not landmark.boundary:
-                # Defender always has position of HVT
-                if not agent.adversary:
-                    landmarks_pos.append(landmark.state.p_pos - agent.state.p_pos)
-                    #landmarks_pos.append(landmark.state.p_pos)
-
-                    # Defender has access to HVT sense region information
-                    for adv in adversaries:
-                        if world.in_sense_region(landmark, adv):
-                            hvt_sense_pos.append(landmark.state.p_pos - adv.state.p_pos)#change relative position order
-                            hvt_sense_vel.append(adv.state.p_vel)
-                            other_pos.append(adv.state.p_pos - agent.state.p_pos)
-                            #other_pos.append(adv.state.p_pos)
-                            other_vel.append(adv.state.p_vel)
-
-
-
-
-                # Attacker only gets position of HVT if it is sensed
-                else:
-                    if world.in_sense_region(agent, landmark):
-                        landmarks_pos.append(landmark.state.p_pos - agent.state.p_pos)
-                        #landmarks_pos.append(landmark.state.p_pos)
-                        #if world
-
-        # Positions, and velocities of all other agents in this agent's reference frame
-
-        for other in world.agents:
-            if other is agent:
-                continue
-            if world.in_sense_region(agent, other) and agent.adversary:
-                other_pos.append(other.state.p_pos - agent.state.p_pos)
-                #other_pos.append(other.state.p_pos)
-                other_vel.append(other.state.p_vel)
-
-        if self.debug:
-            print("### AGENT {} ###".format(agent.name))
-            # len = 2
-            print("agent.state.p_vel: {}".format(agent.state.p_vel))
-            # len = 2
-            print("agent.state.p_pos: {}".format(agent.state.p_pos))
-            # len = 1 or 0
-            print("landmarks_pos: {}".format(landmarks_pos))
-            # len = 1 or 0
-            print("other_pos: {}".format(other_pos))
-            # len = 1 or 0
-            print("other_vel: {}".format(other_vel))
+                    # partial obs info for intruder
+                    elif agent.adversary:
+                        attacker_pos = Intruder.state.p_pos
+                        attacker_vel = Intruder.state.p_vel
+                        # intruder sense HVT
+                        if world.in_sense_region(Intruder, landmark):
+                            landmark_pos_adv = landmark.state.p_pos - Intruder.state.p_pos
+                        # intruder sense defender
+                        if world.in_sense_region(Intruder, Defender):
+                            defender_pos_adv = Defender.state.p_pos - Intruder.state.p_pos
+                            defender_vel = Defender.state.p_vel
+                    # partial obs info for defender
+                    elif not agent.adversary:
+                        defender_pos = Defender.state.p_pos
+                        defender_vel = Defender.state.p_vel
+                        landmark_pos_def = landmark.state.p_pos - Defender.state.p_pos
+                        # HVT sense intruder
+                        if world.in_sense_region(landmark, Intruder):
+                            landmark_pos_adv = landmark.state.p_pos - Intruder.state.p_pos
+                            attacker_pos_def = Intruder.state.p_pos - Defender.state.p_pos
+                            attacker_vel = Intruder.state.p_vel
 
         if agent.adversary:
-            # Sensed both HVT and defender
-            if len(other_pos) != 0 and len(landmarks_pos) != 0:
-                if self.debug:
-                    print("Scenario Observation: Attacker sensed both HVT and defender")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + other_pos + other_vel + [array('d', [0, 0])]), global_obs
-            # Sensed only the defender
-            elif len(other_pos) != 0 and len(landmarks_pos) == 0:
-                if self.debug:
-                    print("Scenario Observation: Attacker sensed only the defender")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      [array('d', [0, 0])] + other_pos + other_vel + [array('d', [0, 0])]), global_obs
-            # Sensed only the HVT
-            elif len(other_pos) == 0 and len(landmarks_pos) != 0:
-                if self.debug:
-                    print("Scenario Observation: Attacker sensed only the HVT")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + [array('d', [0, 0])] + [array('d', [0, 0])] +
-                                      [array('d', [0, 0])]), global_obs
-            # Sensed nothing
-            else:
-                if self.debug:
-                    print("Scenario Observation: Attacker sensed nothing")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      [array('d', [0, 0])] + [array('d', [0, 0])] +
-                                      [array('d', [0, 0])] + [array('d', [0, 0])]), global_obs
+            obs = np.concatenate( [attacker_pos] + [attacker_vel] + [landmark_pos_adv] + [landmark_pos_def] +
+                                  [defender_pos_adv] + [defender_vel] + [attacker_pos_def] + [defender_pos] )
         else:
-            # Sensed attacker with both it's and HVT's region
-            if len(other_pos) != 0 and len(hvt_sense_pos) != 0:
-                if self.debug:
-                    print("Scenario Observation: Defender sensed the Attacker with both "
-                          "it's and the HVT's sense region")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + other_pos + other_vel + hvt_sense_pos), global_obs
-            # Sensed attacker with only it's region
-            elif len(other_pos) != 0 and len(hvt_sense_pos) == 0:
-                if self.debug:
-                    print("Scenario Observation: Defender sensed the Attacker with it's sense region")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + other_pos + other_vel + [array('d', [0, 0])]), global_obs
-            # Sensed attacker with only HVT's region
-            elif len(other_pos) == 0 and len(hvt_sense_pos) != 0:
-                if self.debug:
-                    print("Scenario Observation: Defender sensed the Attacker with HVT's sense region")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + [array('d', [0, 0])] + [array('d', [0, 0])] + hvt_sense_pos), global_obs
-            # Sensed nothing
-            else:
-                if self.debug:
-                    print("Scenario Observation: Defender sensed nothing")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + [array('d', [0, 0])] + [array('d', [0, 0])] +
-                                      [array('d', [0, 0])]), global_obs
+            obs = np.concatenate( [defender_pos] + [defender_vel] + [landmark_pos_def] + [landmark_pos_adv] +
+                                  [attacker_pos_def] + [attacker_vel] + [defender_pos_adv] + [attacker_pos])
+        return obs
+
+
 
     def done(self, agent, world):
         """
@@ -662,3 +594,4 @@ class Scenario(BaseScenario):
         log_data = [agent_type, fixed, perturbed, x, y, dx, dy, fx, fy, collision]
 
         return log_data
+
