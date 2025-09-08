@@ -327,6 +327,10 @@ class World(object):
         # Provide global observation to agents
         self.provide_global_obs = False
 
+        # Place where intruder is respawn
+        self.adv_respawn_pos = None
+
+
     @property
     def entities(self):
         """
