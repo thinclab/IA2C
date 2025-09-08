@@ -47,7 +47,7 @@ class RolloutBuffer:
 # 3) PPO agent
 class PPOAgent:
     def __init__(self, obs_dim, n_actions, **hp):
-        self.gamma       = hp.get('gamma', 0.99)
+        self.gamma       = hp.get('gamma', 0.98)
         self.lam         = hp.get('gae_lambda', 0.95)
         self.eps_clip    = hp.get('eps_clip', 0.2)
         self.K_epochs    = hp.get('K_epochs', 4)

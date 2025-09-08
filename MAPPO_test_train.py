@@ -1,120 +1,210 @@
-from multiagent_particle_env.make_env import make_env
-import torch
+"""
+MAPPO training script with **pure on-policy rollout buffer**.
+
+- Collects trajectories for ROLLOUT_EPISODES episodes (e.g., 32).
+- After collecting, performs ONE on-policy PPO update per agent using the
+  concatenated buffer (episodes are separated by done flags).
+- Then clears buffers and repeats: collect -> update -> clear.
+
+Assumptions
+-----------
+- `PPOAgent` exposes `buffer` with fields: states, actions, logprobs, values,
+  rewards, dones; and a method `update(next_value)` that computes GAE/returns.
+- We pass `next_value=0.0` at the mega-batch boundary since the last time-step
+  of the last episode is terminal (done=1). This is standard in PPO rollouts
+  when bootstrapping does not cross episode boundaries.
+- No time-limit truncation: we continue stepping until env returns done=True.
+- Comments are in English.
+"""
+
+import os
+import random
+from typing import Tuple
+
 import numpy as np
-import torch.nn as nn, torch.optim as optim
-from torch.distributions import Categorical
+import torch
+
+from multiagent_particle_env.make_env import make_env
 from MAPPO_net_test import PPOAgent
-import matplotlib.pyplot as plt
 import neptune
 from API_token import api_token, mappo_project
 
-scenario='eot/simple_hvt_1v1_random_orig_mappo'
+# =========================
+# Config
+# =========================
+scenario = 'eot/simple_hvt_1v1_random_orig_mappo'
 
-run = False
-CUDA=True
-exp_id = '42'
+USE_NEPTUNE = True
+RUN_TAGS = ['onpolicy-rollout-buffer']
+
+CUDA = True
+DEVICE = 'cuda' if (CUDA and torch.cuda.is_available()) else 'cpu'
+
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if DEVICE == 'cuda':
+    torch.cuda.manual_seed_all(SEED)
+
+# PPO / env params
 num_agents = 2
 action_dim = 5
-agents = []
-local_obs_dim = 12
-global_obs_dim = 16 #besides local obs, add another agents relative location and speed
-total_action_dim = action_dim * action_dim #Since there are two agents, possible joint actions could be 25
+obs_dim = 12
+
 NUM_EPISODES = 15000
-NUM_STEP = 200
-n_models = 4
-n_envs = 1
-device = 'cpu' if not CUDA else 'cuda'
-intruder_loss = []
-defender_loss = []
-ep_reward = [[], []]
+ROLLOUT_EPISODES = 32   # collect this many episodes before each PPO update
 
-envs=make_env(scenario_name=scenario, logging=True, done=True)
-if run:
-    run = neptune.init_run(project=mappo_project, api_token=api_token, tags=['no reset'])
+# logging / saving
+exp_id = 116
+model_path = f"/home/lzeng/Thinclab Code/HVT/IA2C/mappo_training_result/{exp_id}/"
+os.makedirs(model_path, exist_ok=False)
 
+# env
+env = make_env(scenario_name=scenario, logging=True, done=True)
+env.world.adv_respawn_pos = 0.5
 
-intruder = PPOAgent(global_obs_dim, action_dim)
-defender = PPOAgent(global_obs_dim, action_dim)
+# =========================
+# Agents
+# =========================
+intruder = PPOAgent(obs_dim, action_dim, gamma=0.98)
+defender = PPOAgent(obs_dim, action_dim, gamma=0.95)
 
-def insert_data(agent, obs, act, reward, logp, val, done):
+# =========================
+# Utils
+# =========================
+
+def insert_data(agent: PPOAgent, obs: np.ndarray, act: int, reward: float, logp: float, val: float, done: bool):
     agent.buffer.states.append(obs)
     agent.buffer.actions.append(act)
     agent.buffer.logprobs.append(logp)
     agent.buffer.values.append(val)
     agent.buffer.rewards.append(reward)
-    agent.buffer.dones.append(float(done))
+    agent.buffer.dones.append(1.0 if done else 0.0)
 
-def check_loss_convergence(loss_history, window=4, tol=1e-3):
-    n = len(loss_history)
-    if n < 2 * window:
-        return False, None, None
+@torch.no_grad()
+def select_action(agent: PPOAgent, obs: np.ndarray) -> Tuple[int, float, float]:
+    """Returns (action, logprob, value)."""
+    a, logp, v = agent.select_action(obs)
+    return int(a), float(logp), float(v)
 
-    prev_mean = np.mean(loss_history[-2*window:-window])
-    curr_mean = np.mean(loss_history[-window:])
-    return (abs(prev_mean - curr_mean) < tol), prev_mean, curr_mean
+# =========================
+# Neptune
+# =========================
+run = None
+if USE_NEPTUNE:
+    run = neptune.init_run(project=mappo_project, api_token=api_token, tags=RUN_TAGS)
+
+# =========================
+# Training Loop (pure on-policy with episode rollout buffer)
+# =========================
+
+done_count = [[], []]   # curriculum counters
+
+collected_eps = 0       # how many episodes collected in current rollout
+
+def maybe_log_scalar(name, value):
+    if run is not None:
+        run[name].append(value)
 
 for ep in range(NUM_EPISODES):
-    o1, o2 = envs.reset()
-    ep_r = [0, 0]
+    # Curriculum (same as your logic, without step cap)
+    if sum(done_count[1]) > 35 and sum(done_count[0]) > 35:
+        env.world.adv_respawn_pos = min(env.world.adv_respawn_pos + 0.05, 0.8)
+        o1, o2 = env.reset(True)
+        done_count = [[], []]
+    elif sum(done_count[1]) > 55:
+        min_dis = 0.5
+        env.world.adv_respawn_pos = max(env.world.adv_respawn_pos - 0.05, min_dis)
+        o1, o2 = env.reset(True)
+        done_count = [[], []]
+    elif sum(done_count[0]) > 55:
+        max_dis = 0.8
+        env.world.adv_respawn_pos = min(env.world.adv_respawn_pos + 0.05, max_dis)
+        o1, o2 = env.reset(True)
+        done_count = [[], []]
+    else:
+        o1, o2 = env.reset(False)
 
-    for step in range(NUM_STEP):
-        a1, logp1, val1 = intruder.select_action(o1)
-        a2, logp2, val2 = defender.select_action(o2)
-        #a2 = 0
-        next_obs, decomposed_r, dones, _ = envs.step(np.array([np.eye(action_dim)[a1], np.eye(action_dim)[a2]]))
-        done = False
-        if np.any(dones):
-            done = True
-        insert_data(intruder, o1, a1, sum(decomposed_r[0][:3]), logp1, val1, done)
-        insert_data(defender, o2, a2, sum(decomposed_r[1]), logp2, val2, done)
+    ep_r = [0.0, 0.0]
+    steps_this_ep = 0
 
-        o1 = next_obs[0]
-        o2 = next_obs[1]
-        ep_r[0] += sum(decomposed_r[0][:3])
-        ep_r[1] += sum(decomposed_r[1])
+    # Rollout one episode
+    while True:
+        a1, logp1, val1 = select_action(intruder, o1)
+        a2, logp2, val2 = select_action(defender, o2)
+
+        next_obs, decomposed_r, dones, _ = env.step(
+            np.array([np.eye(action_dim)[a1], np.eye(action_dim)[a2]])
+        )
+        true_done = bool(np.any(dones))
+
+        r1 = float(sum(decomposed_r[0][:3]))
+        r2 = float(sum(decomposed_r[1]))
+
+        insert_data(intruder, o1, a1, r1, logp1, val1, true_done)
+        insert_data(defender, o2, a2, r2, logp2, val2, true_done)
+
+        o1, o2 = next_obs[0], next_obs[1]
+        ep_r[0] += r1
+        ep_r[1] += r2
+        steps_this_ep += 1
+
         access_angle = decomposed_r[0][-1]
-        if access_angle != None and run != False:
-            run[f'train/Access_Angle'].append(access_angle)
-        if done:
-            o1, o2 = envs.reset()
-    print(ep, step, ep_r)
-    if run:
-        run[f'train/Intruder_Reward'].append(ep_r[0])
-        run[f'train/Defender_Reward'].append(ep_r[1])
+        if access_angle is not None:
+            maybe_log_scalar('train/Access_Angle', access_angle)
 
-    with torch.no_grad():
-        _, next_val1 = intruder.net(torch.from_numpy(o1).float())
-        _, next_val2 = defender.net(torch.from_numpy(o2).float())
+        if true_done:
+            done_count[0].append(1 if dones[0] else 0)
+            done_count[1].append(1 if dones[1] else 0)
+            if len(done_count[0]) > 100: done_count[0].pop(0)
+            if len(done_count[1]) > 100: done_count[1].pop(0)
+            break
 
-    intruder_loss.append(intruder.update(next_val1.item()))
-    defender_loss.append(defender.update(next_val2.item()))
-    if len(intruder_loss) > 150:
-        del intruder_loss[0]
-        del defender_loss[0]
+    # Episode logging
+    maybe_log_scalar('train/ep_length', steps_this_ep)
+    maybe_log_scalar('train/Intruder_Reward', ep_r[0])
+    maybe_log_scalar('train/Defender_Reward', ep_r[1])
+    maybe_log_scalar('train/intruder_final_r', decomposed_r[0][2])
+    maybe_log_scalar('train/defender_final_r', decomposed_r[1][2])
+    maybe_log_scalar('train/adv_respawn_pos', env.world.adv_respawn_pos)
+    maybe_log_scalar('train/agent_size', env.world.agents[0].size)
 
+    collected_eps += 1
 
-    if run:
-        run[f'train/Intruder_Actor_Loss'].append(intruder_loss[-1]['actor_loss'])
-        run[f'train/Intruder_Critic_Loss'].append(intruder_loss[-1]['critic_loss'])
-        run[f'train/Intruder_Entropy'].append(intruder_loss[-1]['entropy'])
-        run[f'train/Defender_Actor_Loss'].append(defender_loss[-1]['actor_loss'])
-        run[f'train/Defender_Critic_Loss'].append(defender_loss[-1]['critic_loss'])
-        run[f'train/Defender_Entropy'].append(defender_loss[-1]['entropy'])
+    # When enough episodes are collected, do ONE on-policy update for each agent, then clear buffers
+    if collected_eps >= ROLLOUT_EPISODES:
+        # For on-policy, last transition is terminal, so we can set next_value=0.0
+        intruder_out = intruder.update(0.0)
+        defender_out = defender.update(0.0)
 
-    converge_intruder_actor, _, _ = check_loss_convergence([loss['actor_loss'] for loss in intruder_loss])
-    converge_intruder_critic, pre_mean, cur_mean = check_loss_convergence([loss['critic_loss'] for loss in intruder_loss])
-    print(f"Intruder last step mean loss {pre_mean}, cur step mean loss {cur_mean}")
-    converge_defender_actor, _, _ = check_loss_convergence([loss['actor_loss'] for loss in defender_loss])
-    converge_defender_critic, pre_mean, cur_mean = check_loss_convergence([loss['critic_loss'] for loss in defender_loss])
-    print(f"Defender last step mean loss {pre_mean}, cur step mean loss {cur_mean}")
+        maybe_log_scalar('rollout/intruder_actor_loss', intruder_out['actor_loss'])
+        maybe_log_scalar('rollout/intruder_critic_loss', intruder_out['critic_loss'])
+        maybe_log_scalar('rollout/defender_actor_loss', defender_out['actor_loss'])
+        maybe_log_scalar('rollout/defender_critic_loss', defender_out['critic_loss'])
 
-    if converge_defender_critic and converge_defender_actor and converge_intruder_critic and converge_intruder_actor:
-        print("All agents converge")
-        break
+        # Clear buffers explicitly to start the next collection window
+        intruder.buffer.states.clear()
+        intruder.buffer.actions.clear()
+        intruder.buffer.logprobs.clear()
+        intruder.buffer.values.clear()
+        intruder.buffer.rewards.clear()
+        intruder.buffer.dones.clear()
+
+        defender.buffer.states.clear()
+        defender.buffer.actions.clear()
+        defender.buffer.logprobs.clear()
+        defender.buffer.values.clear()
+        defender.buffer.rewards.clear()
+        defender.buffer.dones.clear()
+
+        collected_eps = 0
+
+    # Periodic checkpoint (optional)
     if ep % 50 == 0:
-        torch.save(intruder.net.state_dict(), "test_PPO_intruder_" + exp_id)
-        torch.save(defender.net.state_dict(), "test_PPO_defender_" + exp_id)
-#print(intruder_loss)
-torch.save(intruder.net.state_dict(), "test_PPO_intruder_" + exp_id)
-torch.save(defender.net.state_dict(), "test_PPO_defender_" + exp_id)
+        torch.save(intruder.net.state_dict(), os.path.join(model_path, f"test_PPO_intruder_{exp_id}"))
+        torch.save(defender.net.state_dict(), os.path.join(model_path, f"test_PPO_defender_{exp_id}"))
 
+# Final save
+torch.save(intruder.net.state_dict(), os.path.join(model_path, f"test_PPO_intruder_{exp_id}"))
+torch.save(defender.net.state_dict(), os.path.join(model_path, f"test_PPO_defender_{exp_id}"))
