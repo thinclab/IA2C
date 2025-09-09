@@ -1,19 +1,19 @@
 """
-MAPPO training script with **pure on-policy rollout buffer**.
+MAPPO training script — Pure On-Policy with Rollout Buffer (episodes) + Soft Time Limit.
 
-- Collects trajectories for ROLLOUT_EPISODES episodes (e.g., 32).
-- After collecting, performs ONE on-policy PPO update per agent using the
-  concatenated buffer (episodes are separated by done flags).
-- Then clears buffers and repeats: collect -> update -> clear.
+- Collect ROLLOUT_EPISODES (e.g., 32) full episodes per cycle
+- Then run ONE on-policy PPO update per agent on the concatenated rollout buffer
+- Clear buffers and repeat: collect -> update -> clear
+- Soft time limit prevents extremely long stalemates by forcing a terminal
+  when step count reaches MAX_STEPS_PER_EPISODE (with a small terminal penalty)
 
 Assumptions
 -----------
 - `PPOAgent` exposes `buffer` with fields: states, actions, logprobs, values,
   rewards, dones; and a method `update(next_value)` that computes GAE/returns.
-- We pass `next_value=0.0` at the mega-batch boundary since the last time-step
-  of the last episode is terminal (done=1). This is standard in PPO rollouts
-  when bootstrapping does not cross episode boundaries.
-- No time-limit truncation: we continue stepping until env returns done=True.
+- We set `next_value=0.0` at update time because each episode in the rollout
+  ends with done=1 (either natural or soft time limit forced), i.e., no bootstrap
+  across episode boundaries is required.
 - Comments are in English.
 """
 
@@ -35,7 +35,7 @@ from API_token import api_token, mappo_project
 scenario = 'eot/simple_hvt_1v1_random_orig_mappo'
 
 USE_NEPTUNE = True
-RUN_TAGS = ['onpolicy-rollout-buffer']
+RUN_TAGS = ['onpolicy-rollout-buffer', 'soft-time-limit']
 
 CUDA = True
 DEVICE = 'cuda' if (CUDA and torch.cuda.is_available()) else 'cpu'
@@ -55,8 +55,14 @@ obs_dim = 12
 NUM_EPISODES = 15000
 ROLLOUT_EPISODES = 32   # collect this many episodes before each PPO update
 
+# Soft time-limit settings
+USE_SOFT_TIME_LIMIT   = True
+MAX_STEPS_PER_EPISODE = 5000     # force end if exceeded and not naturally done
+TIME_LIMIT_PENALTY_INT = -0.2    # terminal shaping penalty for intruder
+TIME_LIMIT_PENALTY_DEF = -0.2    # terminal shaping penalty for defender
+
 # logging / saving
-exp_id = 116
+exp_id = 118
 model_path = f"/home/lzeng/Thinclab Code/HVT/IA2C/mappo_training_result/{exp_id}/"
 os.makedirs(model_path, exist_ok=False)
 
@@ -95,20 +101,19 @@ run = None
 if USE_NEPTUNE:
     run = neptune.init_run(project=mappo_project, api_token=api_token, tags=RUN_TAGS)
 
-# =========================
-# Training Loop (pure on-policy with episode rollout buffer)
-# =========================
-
-done_count = [[], []]   # curriculum counters
-
-collected_eps = 0       # how many episodes collected in current rollout
-
 def maybe_log_scalar(name, value):
     if run is not None:
         run[name].append(value)
 
+# =========================
+# Training Loop (pure on-policy with soft time limit)
+# =========================
+
+done_count = [[], []]   # curriculum counters
+collected_eps = 0       # how many episodes collected in current rollout
+
 for ep in range(NUM_EPISODES):
-    # Curriculum (same as your logic, without step cap)
+    # Curriculum (same thresholds as your original code)
     if sum(done_count[1]) > 35 and sum(done_count[0]) > 35:
         env.world.adv_respawn_pos = min(env.world.adv_respawn_pos + 0.05, 0.8)
         o1, o2 = env.reset(True)
@@ -139,8 +144,20 @@ for ep in range(NUM_EPISODES):
         )
         true_done = bool(np.any(dones))
 
+        # aggregate rewards
         r1 = float(sum(decomposed_r[0][:3]))
         r2 = float(sum(decomposed_r[1]))
+
+        # Soft time limit: if not naturally done and step cap reached, force terminal with penalty
+        steps_this_ep += 1
+        hit_time_limit = False
+        if (not true_done) and USE_SOFT_TIME_LIMIT and (steps_this_ep >= MAX_STEPS_PER_EPISODE):
+            hit_time_limit = True
+            true_done = True
+            r1 += TIME_LIMIT_PENALTY_INT
+            r2 += TIME_LIMIT_PENALTY_DEF
+            # fabricate dones only for curriculum bookkeeping; training uses `true_done`
+            dones = [False, False]
 
         insert_data(intruder, o1, a1, r1, logp1, val1, true_done)
         insert_data(defender, o2, a2, r2, logp2, val2, true_done)
@@ -148,17 +165,18 @@ for ep in range(NUM_EPISODES):
         o1, o2 = next_obs[0], next_obs[1]
         ep_r[0] += r1
         ep_r[1] += r2
-        steps_this_ep += 1
 
         access_angle = decomposed_r[0][-1]
         if access_angle is not None:
             maybe_log_scalar('train/Access_Angle', access_angle)
 
         if true_done:
+            # curriculum bookkeeping
             done_count[0].append(1 if dones[0] else 0)
             done_count[1].append(1 if dones[1] else 0)
             if len(done_count[0]) > 100: done_count[0].pop(0)
             if len(done_count[1]) > 100: done_count[1].pop(0)
+            maybe_log_scalar('train/time_limit_forced', int(hit_time_limit))
             break
 
     # Episode logging
@@ -174,8 +192,7 @@ for ep in range(NUM_EPISODES):
 
     # When enough episodes are collected, do ONE on-policy update for each agent, then clear buffers
     if collected_eps >= ROLLOUT_EPISODES:
-        # For on-policy, last transition is terminal, so we can set next_value=0.0
-        intruder_out = intruder.update(0.0)
+        intruder_out = intruder.update(0.0)  # terminal at end of episodes → bootstrap 0
         defender_out = defender.update(0.0)
 
         maybe_log_scalar('rollout/intruder_actor_loss', intruder_out['actor_loss'])
@@ -184,23 +201,17 @@ for ep in range(NUM_EPISODES):
         maybe_log_scalar('rollout/defender_critic_loss', defender_out['critic_loss'])
 
         # Clear buffers explicitly to start the next collection window
-        intruder.buffer.states.clear()
-        intruder.buffer.actions.clear()
-        intruder.buffer.logprobs.clear()
-        intruder.buffer.values.clear()
-        intruder.buffer.rewards.clear()
-        intruder.buffer.dones.clear()
+        intruder.buffer.states.clear();  intruder.buffer.actions.clear()
+        intruder.buffer.logprobs.clear();intruder.buffer.values.clear()
+        intruder.buffer.rewards.clear(); intruder.buffer.dones.clear()
 
-        defender.buffer.states.clear()
-        defender.buffer.actions.clear()
-        defender.buffer.logprobs.clear()
-        defender.buffer.values.clear()
-        defender.buffer.rewards.clear()
-        defender.buffer.dones.clear()
+        defender.buffer.states.clear();  defender.buffer.actions.clear()
+        defender.buffer.logprobs.clear();defender.buffer.values.clear()
+        defender.buffer.rewards.clear(); defender.buffer.dones.clear()
 
         collected_eps = 0
 
-    # Periodic checkpoint (optional)
+    # Periodic checkpoint
     if ep % 50 == 0:
         torch.save(intruder.net.state_dict(), os.path.join(model_path, f"test_PPO_intruder_{exp_id}"))
         torch.save(defender.net.state_dict(), os.path.join(model_path, f"test_PPO_defender_{exp_id}"))
