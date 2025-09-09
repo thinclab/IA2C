@@ -284,7 +284,7 @@ class MultiAgentEnv(gym.Env):
                 agent_data = [episode, step, i] + self.logging_callback(agent, self.world) + [reward, done, info]
                 self.logger.add("State", agent_data)
 
-    def reset(self):
+    def reset(self, ep_num):
         """
         Reset the environment
 
@@ -292,7 +292,7 @@ class MultiAgentEnv(gym.Env):
             obs_n (list): Observations for n-number of agents
         """
         # Reset world
-        self.reset_callback(self.world)
+        self.reset_callback(self.world, ep_num)
 
         # Reset renderer
         self._reset_render()
