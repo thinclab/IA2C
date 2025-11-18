@@ -27,12 +27,12 @@ import random
 
 #declare global variable
 ATT_Sensing_region = 0.25
-HVT_Size = 0.15
-HVT_Sensing_region = 0.6
+HVT_Size = 0.45
+HVT_Sensing_region = 0.3
 V = 0.7
-Speed_Factor = 0.5
+Speed_Factor = 0.3
 Map_size = 1
-Agent_size = 0.05
+Agent_size = 0.02
 class Scenario(BaseScenario):
     """
     Define the world, reward, and observations for the scenario.
@@ -129,7 +129,7 @@ class Scenario(BaseScenario):
         world.agents[1].sense_region = defender_sense_region_size
         world.agents[1].size = Agent_size
         world.agents[1].max_speed = Speed_Factor
-
+        world.def_respawn_pos = 0.2
         # Add landmarks
         world.landmarks = [Landmark() for i in range(num_landmarks)]
 
@@ -200,14 +200,6 @@ class Scenario(BaseScenario):
 
         return [intruder_x, intruder_y], [defender_x, defender_y]
 
-    def sample_in_quarter_disk(self, radius=0.75):
-        radius = HVT_Size+HVT_Sensing_region + 0.2
-        u = random.random()
-        r = radius
-        theta = random.uniform(0, math.pi / 2)
-        x = r * math.cos(theta)
-        y = r * math.sin(theta)
-        return [x, y]
 
     def random_agents_inside_HVT(self, inside_HVT):
         '''
@@ -239,13 +231,11 @@ class Scenario(BaseScenario):
                 pos_x = rng.uniform(-1*HVT_sensing_range, HVT_sensing_range)
             return [pos_x, pos_y]
 
-    def random_agents_with_constrain_intruer(self, world, restart_in_HVT):
+    def random_agents_with_constrain_intruer(self, world):
         HVT_size = HVT_Size
         sensing_range = HVT_Sensing_region
         HVT_sensing_range = HVT_size + sensing_range + 0.1
         rng = random.Random()
-        if restart_in_HVT and world.adv_respawn_pos < HVT_sensing_range:
-            world.adv_respawn_pos += 0.00
         def inside_HVT():
             theta = np.random.uniform(0, 2*np.pi)
 
@@ -267,10 +257,93 @@ class Scenario(BaseScenario):
                 dist_sq = (pos_x)**2 + (pos_y)**2
 
             return [pos_x, pos_y]
-        if world.adv_respawn_pos < HVT_sensing_range:
-            return inside_HVT()
+        # if world.adv_respawn_pos < HVT_sensing_range:
+        #     return inside_HVT()
+        # else:
+        return outside_HVT()
+
+    def sample_positions_with_sensing(self, hvt_pos, intruder_r, defender_r, seed=None):
+        """
+        基于三个参数采样 (intruder, defender)：
+          - 若 intruder_r ≤ sensing_range：intruder 在 HVT 的半径 intruder_r 的圆周上。
+            否则：intruder 在环带 [sensing_range, intruder_r] 内面积均匀采样。
+          - 若 defender_r ≤ sensing_range：defender 在 intruder 的半径 defender_r 的圆周上。
+            否则：defender 在 HVT 的 sensing_range 圆盘内（相对 HVT）面积均匀采样。
+        """
+
+        def _sample_on_circle(center, radius, rng):
+            theta = rng.uniform(0.0, 2 * np.pi)
+            return np.array([
+                center[0] + radius * np.cos(theta),
+                center[1] + radius * np.sin(theta)
+            ], dtype=float)
+
+        def _sample_in_annulus(center, r_min, r_max, rng):
+            # 面积均匀：先在 [r_min^2, r_max^2] 上取均匀，再开方
+            r = np.sqrt(rng.uniform(r_min ** 2, r_max ** 2))
+            theta = rng.uniform(0.0, 2 * np.pi)
+            return np.array([
+                center[0] + r * np.cos(theta),
+                center[1] + r * np.sin(theta)
+            ], dtype=float)
+
+        def _sample_in_disk(center, r_max, rng):
+            # 面积均匀：半径平方均匀再开方
+            r = np.sqrt(rng.uniform(0.0, r_max ** 2))
+            theta = rng.uniform(0.0, 2 * np.pi)
+            return np.array([
+                center[0] + r * np.cos(theta),
+                center[1] + r * np.sin(theta)
+            ], dtype=float)
+
+        def _sample_on_circle_inside_disk(intr, hvt, defender_r, sensing_range, rng):
+            """
+            从以 intr 为圆心、半径 defender_r 的圆周上，采样一个点，且该点需位于
+            以 hvt 为圆心、半径 sensing_range 的圆盘内。
+            若无可行解，返回 None。
+            """
+            dx, dy = hvt[0] - intr[0], hvt[1] - intr[1]
+            d = np.hypot(dx, dy)
+
+            # 特例：intr 与 HVT 重合
+            if d == 0.0:
+                if defender_r <= sensing_range:
+                    return _sample_on_circle(intr, defender_r, rng)  # 整个圆都在盘内
+                else:
+                    return _sample_in_disk(hvt_pos, sensing_range, rng)  # 完全不可行
+
+            # 余弦定理推导的阈值：cos(alpha) >= k
+            # alpha 是 (defender方向) 与 (intr->HVT) 之间的夹角
+            k = (defender_r ** 2 + d ** 2 - sensing_range ** 2) / (2.0 * defender_r * d)
+
+            if k > 1.0:
+                # 无角度能满足（圆与盘不相交且完全在外侧）
+                return np.array([0.0, 0.0])#_sample_in_disk(hvt_pos, sensing_range, rng)
+            elif k <= -1.0:
+                # 整个圆都在盘内：任意角度
+                return _sample_on_circle(intr, defender_r, rng)
+            else:
+                # 只有中心指向 HVT 的方向附近的一段圆弧可行
+                arc = np.arccos(k)  # 可行角度范围大小
+                base = np.arctan2(dy, dx)  # intr -> HVT 的方向
+                theta = base + rng.uniform(-arc, arc)  # 在可行弧段上均匀采样
+                return np.array([intr[0] + defender_r * np.cos(theta),
+                                 intr[1] + defender_r * np.sin(theta)], dtype=float)
+
+
+        rng = np.random.default_rng(seed)
+        sensing_range = HVT_Size + HVT_Sensing_region
+        # --- intruder ---
+        if intruder_r <= sensing_range:
+            intr = _sample_on_circle(hvt_pos, intruder_r, rng)
         else:
-            return outside_HVT()
+            intr = _sample_in_annulus(hvt_pos, sensing_range, 1.0, rng)
+
+        # --- defender ---
+        defdr = _sample_on_circle_inside_disk(intr, [0.0, 0.0],defender_r, sensing_range, rng)
+
+        return intr, defdr
+
 
     def reset_world(self, world, restart_in_HVT):
         """
@@ -298,9 +371,14 @@ class Scenario(BaseScenario):
         #pos = self.engage_phase_pos()
         #random.seed()
         self.in_HVT = False
+        att_pos, def_pos = self.sample_positions_with_sensing([0.0, 0.0], world.adv_respawn_pos, world.def_respawn_pos)
         #asym_pos_att, asym_pos_def = self.asym_phase_pos(Intruder_pos=[0.55, 0.5], Defender_pos=True)
-        world.agents[0].state.p_pos = np.asarray(self.random_agents_with_constrain_intruer(world, restart_in_HVT))#np.asarray(pos[0])#np.asarray(self.random_agents_with_constrain_intruer())#np.asarray([0.6, 0.7])#np.asarray(self.random_agents_with_constrain_intruer())
-        world.agents[1].state.p_pos = np.asarray([0.0, 0.0])#np.asarray(pos[1])#np.asarray(self.random_agents_inside_HVT(2))#np.asarray([0.0, 0.0])#np.asarray(self.random_agents_inside_HVT(False))
+        world.agents[0].state.p_pos = np.asarray(att_pos)#np.asarray(pos[0])#np.asarray(self.random_agents_with_constrain_intruer())#np.asarray([0.6, 0.7])#np.asarray(self.random_agents_with_constrain_intruer())
+        if not restart_in_HVT:
+            world.agents[1].state.p_pos = np.asarray(def_pos)#np.asarray(pos[1])#np.asarray(self.random_agents_inside_HVT(2))#np.asarray([0.0, 0.0])#np.asarray(self.random_agents_inside_HVT(False))
+        else:
+            world.agents[1].state.p_pos = np.asarray([0.0, 0.0])
+            world.agents[0].state.p_pos = np.asarray(self.random_agents_with_constrain_intruer(world))
 
     def good_agents(self, world):
         """
@@ -409,101 +487,24 @@ class Scenario(BaseScenario):
         Returns:
             (float) Total agent reward
         """
-        reward = 0
-
-        def align_reward_from_vel(
-                v_a,
-                v_b,
-                a_in_mask=None,
-                lam_align=0.05,
-                positive_only=True,
-                v_ref_b=0.05,
-                min_speed_a=1e-6,
-                min_speed_b=1e-6,
-                eps=1e-8
-        ):
-            v_a = np.asarray(v_a, dtype=np.float64)
-            v_b = np.asarray(v_b, dtype=np.float64)
-            assert v_a.shape[-1] == 2 and v_b.shape[-1] == 2, "velocities must have last dim = 2"
-
-            # normal v
-            n_a = np.linalg.norm(v_a, axis=-1)  # [...]
-            n_b = np.linalg.norm(v_b, axis=-1)  # [...]
-
-            # cosθ ∈ [-1, 1]
-            dot = (v_a * v_b).sum(axis=-1)  # [...]
-            cos = dot / (n_a * n_b + eps)
-            if positive_only:
-                cos = np.clip(cos, 0.0, None)  # only reward if their direction is same
-
-            # encourage defender to move
-            w = 0.5
-            if v_ref_b is not None:
-                w_b = np.clip(n_b / (v_ref_b + eps), 0.0, 1.0)
-                w = w * w_b
-
-            r = lam_align * cos * w
-
-            # eliminate reward when speed is too small
-            valid = (n_a >= min_speed_a) & (n_b >= min_speed_b)
-            r = np.where(valid, r, 0.0)
-            if a_in_mask is not None:
-                a_in_mask = np.asarray(a_in_mask, dtype=bool)
-                r = np.where(a_in_mask, r, 0.0)
-
-            return r
 
         intruder = self.adversaries(world)[0]
         landmarks = [landmark for landmark in world.landmarks if not landmark.boundary]
+        step_r, shape_r, final_r = 0, 0, 0
 
-        # Reward can optionally be dense
-        if dense:
-            # Incentivize defender to remain near HVT and keep attacker away from HVT
-            step_r, shape_r, final_r = 0, 0, 0
-            for hvt in landmarks:
-                if world.in_sense_region(hvt, agent):
-                    step_r = 0.00
-                    '''else:
-                    reward -= 0.1'''
-
-                if world.in_sense_region(hvt, intruder):
-                    HVT_radius = hvt.sense_region + hvt.size
-                    relative_pos = agent.state.p_pos - intruder.state.p_pos
-                    cur_dist = pow(relative_pos[0] * relative_pos[0] + relative_pos[1] * relative_pos[1], 1/2)
-                    #if cur_dist >= HVT_radius:
-                    #shape_r = 0.05 * (HVT_radius - cur_dist) / HVT_radius
-                    #shape_r = max(shape_r, 0)
-                    #shape_r += align_reward_from_vel(intruder.state.p_vel, agent.state.p_vel, v_ref_b=0.05)
-                    #HVT_intruder_dist = pow(intruder.state.p_pos[0]**2 + intruder.state.p_pos[1]**2, 1/2)
-                    #shape_r -= 4*HVT_intruder_dist/HVT_radius
-                    #else:
-                    #    shape_r = (HVT_radius - cur_dist) / (HVT_radius) * 2
-                    #shape_r = -3 * cur_dist#max(shape_r, 0)
-                    #shape_r = np.exp(-2 * cur_dist) * 0.05
-                        #shape_r += HVT_radius/(cur_dist + HVT_radius) * 2
-                    '''else:0.3
-                        reward -= 0.2
-
-                    relative_pos = hvt.state.p_pos - intruder.state.p_pos
-                    cur_dist = pow(relative_pos[0] * relative_pos[0] + relative_pos[1] * relative_pos[1], 1/2)
-                    if cur_dist < 0.5:
-                        reward -= (1 - cur_dist)/0.5 * 0.5'''
-                '''else:
-                    #leads def back to HVT
-                    relative_pos = agent.state.p_pos - hvt.state.p_pos
-                    cur_dist = pow(relative_pos[0] * relative_pos[0] + relative_pos[1] * relative_pos[1], 1/2)
-                    reward += (0.5 - cur_dist)/0.5 * 0.5'''
 
         # Determine collisions with attackers, assign reward
 
         if world.is_collision(agent, intruder):
-            final_r = 20
+            final_r = 10
+        else:
+            step_r = -0.01
 
         # Determine Attacker collision with HVT and assign penalty
 
         for hvt in landmarks:
             if world.is_collision(intruder, hvt):
-                final_r = -20#- ((1 - cur_dist)/1 * 2)
+                final_r = -10#- ((1 - cur_dist)/1 * 2)
 
         # Determine if agent left the screen and assign penalties
         for coordinate_position in range(world.dimension_position):
@@ -530,30 +531,6 @@ class Scenario(BaseScenario):
         landmarks = [landmark for landmark in world.landmarks if not landmark.boundary]
         step_r, shape_r, final_r = 0, 0, 0
 
-        # Reward can optionally be dense
-        if dense:
-            # Incentivize attacker to search out HVT
-            for hvt in landmarks:
-                #reward for intruder stay outside HVT sensing range
-                if world.in_sense_region(hvt, agent):
-                    step_r += 0.0#-0.1
-                else:
-                    step_r -= 0.0
-                if world.in_sense_region(agent, hvt):
-                    hvt_pos = hvt.state.p_pos - agent.state.p_pos
-                    dist = np.sqrt(np.sum(np.square(hvt_pos))) - hvt.size - agent.size#pow(hvt_pos[0] * hvt_pos[0] + hvt_pos[1] * hvt_pos[1], 1/2)
-                    #shape_r += (agent.sense_region - dist)/(agent.sense_region) * 0.1
-                else:
-                    step_r -= 0.05
-                """if world.in_sense_region(agent, defender):
-                    relative_pos = agent.state.p_pos - defender.state.p_pos
-                    dist = np.sqrt(np.sum(np.square(relative_pos))) #- agent.size - defender.size
-                    shape_r -= (agent.sense_region - dist) / agent.sense_region * 0.2"""
-                #else:
-                #    step_r -= 0
-
-
-
         # Determine collisions with defenders, assign penalties
 
         if world.is_collision(agent, defender):
@@ -562,7 +539,9 @@ class Scenario(BaseScenario):
         # Determine Attacker collision with HVT and assign reward
         for hvt in landmarks:
             if world.is_collision(agent, hvt):
-                final_r = 25
+                final_r = 10
+            else:
+                step_r = -0.01
 
         # Determine if agent left the screen and assign penalties
         for coordinate_position in range(world.dimension_position):
@@ -586,6 +565,14 @@ class Scenario(BaseScenario):
                        distance to all other agents in the agent's reference frame,
                        and the velocities of the good agents.
         """
+        def nearest_point_on_circle(point, circle, r):
+            px, py = point[0], point[1]
+            cx, cy = circle[0], circle[1]
+            vx, vy = px - cx, py - cy
+            d = math.hypot(vx, vy)  # distance between point to circle center
+            scale = r / d
+            return [cx + vx * scale, cy + vy * scale]
+
         intruder = self.adversaries(world)[0]
         defender = self.good_agents(world)[0]
         hvt = None
@@ -605,12 +592,15 @@ class Scenario(BaseScenario):
         #print(landmark.state.p_pos - intruder.state.p_pos)
         if agent.adversary:
             if world.in_sense_region(intruder, hvt):
-                landmarks_pos = [landmark.state.p_pos - intruder.state.p_pos]
+                #nearest_point = nearest_point_on_circle(intruder.state.p_pos, hvt.state.p_pos,
+                #                                        hvt.sense_region)
+                landmarks_pos = [hvt.state.p_pos - intruder.state.p_pos]
             if world.in_sense_region(intruder, defender):
                 other_pos = [defender.state.p_pos - intruder.state.p_pos]
                 other_vel = [defender.state.p_vel]
             self_pos = [intruder.state.p_pos]
             self_vel = [intruder.state.p_vel]
+            return np.concatenate(self_vel + self_pos + landmarks_pos + other_pos + other_vel )
 
         else:
             if world.in_sense_region(hvt, intruder):
@@ -621,113 +611,8 @@ class Scenario(BaseScenario):
             self_pos = [defender.state.p_pos]
             self_vel = [defender.state.p_vel]
         #print(self_vel , self_pos , landmarks_pos , other_pos , other_vel , hvt_sense_pos)
-        return np.concatenate(self_vel + self_pos + landmarks_pos + other_pos + other_vel + hvt_sense_pos)
+            return np.concatenate(self_vel + self_pos + landmarks_pos + other_pos + other_vel + hvt_sense_pos)
 
-    '''def observation(self, agent, world):
-        adversaries = self.adversaries(world)
-
-        # Get positions of HVT in this agent's reference frame
-        landmarks_pos = []
-        hvt_sense_pos = []
-        hvt_sense_vel = []
-        other_pos = []
-        other_vel = []
-        for landmark in world.landmarks:
-            if not landmark.boundary:
-                # Defender always has position of HVT
-                if not agent.adversary:
-                    landmarks_pos.append(landmark.state.p_pos - agent.state.p_pos)
-
-                    # Defender has access to HVT sense region information
-                    for adv in adversaries:
-                        if world.in_sense_region(landmark, adv):
-                            hvt_sense_pos.append(landmark.state.p_pos - adv.state.p_pos)
-                            hvt_sense_vel.append(adv.state.p_vel)
-                            if agent.adversary == False:
-                                other_pos.append(agent.state.p_pos - adv.state.p_pos)
-                                other_vel.append(adv.state.p_vel)
-                # Attacker only gets position of HVT if it is sensed
-                else:
-                    if world.in_sense_region(agent, landmark):
-                        landmarks_pos.append(landmark.state.p_pos - agent.state.p_pos)
-
-        # Positions, and velocities of all other agents in this agent's reference frame
-
-        for other in world.agents:
-            if other is agent:
-                continue
-            if agent.adversary == True:
-                if world.in_sense_region(agent, other):
-                    other_pos.append(other.state.p_pos - agent.state.p_pos)
-                    other_vel.append(other.state.p_vel)
-
-        if self.debug:
-            print("### AGENT {} ###".format(agent.name))
-            # len = 2
-            print("agent.state.p_vel: {}".format(agent.state.p_vel))
-            # len = 2
-            print("agent.state.p_pos: {}".format(agent.state.p_pos))
-            # len = 1 or 0
-            print("landmarks_pos: {}".format(landmarks_pos))
-            # len = 1 or 0
-            print("other_pos: {}".format(other_pos))
-            # len = 1 or 0
-            print("other_vel: {}".format(other_vel))
-
-        if agent.adversary:
-            # Sensed both HVT and defender
-            if len(other_pos) != 0 and len(landmarks_pos) != 0:
-                if self.debug:
-                    print("Scenario Observation: Attacker sensed both HVT and defender")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + other_pos + other_vel + [array('d', [0, 0])])
-            # Sensed only the defender
-            elif len(other_pos) != 0 and len(landmarks_pos) == 0:
-                if self.debug:
-                    print("Scenario Observation: Attacker sensed only the defender")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      [array('d', [0, 0])] + other_pos + other_vel + [array('d', [0, 0])])
-            # Sensed only the HVT
-            elif len(other_pos) == 0 and len(landmarks_pos) != 0:
-                if self.debug:
-                    print("Scenario Observation: Attacker sensed only the HVT")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + [array('d', [0, 0])] + [array('d', [0, 0])] +
-                                      [array('d', [0, 0])])
-            # Sensed nothing
-            else:
-                if self.debug:
-                    print("Scenario Observation: Attacker sensed nothing")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      [array('d', [0, 0])] + [array('d', [0, 0])] +
-                                      [array('d', [0, 0])] + [array('d', [0, 0])])
-        else:
-            # Sensed attacker with both it's and HVT's region
-            if len(other_pos) != 0 and len(hvt_sense_pos) != 0:
-                if self.debug:
-                    print("Scenario Observation: Defender sensed the Attacker with both "
-                          "it's and the HVT's sense region")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + other_pos + other_vel + hvt_sense_pos)
-            # Sensed attacker with only it's region
-            elif len(other_pos) != 0 and len(hvt_sense_pos) == 0:
-                if self.debug:
-                    print("Scenario Observation: Defender sensed the Attacker with it's sense region")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + other_pos + other_vel + [array('d', [0, 0])])
-            # Sensed attacker with only HVT's region
-            elif len(other_pos) == 0 and len(hvt_sense_pos) != 0:
-                if self.debug:
-                    print("Scenario Observation: Defender sensed the Attacker with HVT's sense region")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + other_pos + other_vel + hvt_sense_pos)
-            # Sensed nothing
-            else:
-                if self.debug:
-                    print("Scenario Observation: Defender sensed nothing")
-                return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] +
-                                      landmarks_pos + [array('d', [0, 0])] + [array('d', [0, 0])] +
-                                      [array('d', [0, 0])])'''
 
     def done(self, agent, world):
         """
