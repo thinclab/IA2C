@@ -41,7 +41,7 @@ obs_dim = 12
 
 N_DIR = 5                     # number of direction labels for joint Q (e.g., approach/depart)
 NUM_UPDATES = 8000           # number of PPO update cycles (each after ROLLOUT_EPISODES episodes)
-ROLLOUT_EPISODES = 32        # collect this many episodes before each PPO update
+ROLLOUT_EPISODES = 16        # collect this many episodes before each PPO update
 
 # Soft time-limit settings
 USE_SOFT_TIME_LIMIT    = True
@@ -55,7 +55,7 @@ TIME_LIMIT_PENALTY_INT = - max(1.0, k * stall_mag)   # e.g., c_step=0.005 → -3
 TIME_LIMIT_PENALTY_DEF = - max(0.5, 0.6 * k * stall_mag)
 
 # logging / saving
-exp_id = 173
+exp_id = 177
 model_path = f"./mappo_training_result/{exp_id}/"
 os.makedirs(model_path, exist_ok=True)
 
@@ -147,16 +147,14 @@ def compute_weights_int(step: int = None, max_step: int = None):
     w = np.asarray(w, dtype=np.float64)
     w = np.maximum(w, MIN_WEIGHT_EPS_INT)
 
-    # ====== 关键：随训练进度对 hardest pool 施加额外 bias ======
+    # ====== hardest pool bias ======
     if step is not None and max_step is not None and max_step > 0:
         prog = np.clip(step / max_step, 0.0, 1.0)    # 0 → 开始, 1 → 结束
-        # bias_factor 从 1 慢慢涨到 1 + BIAS_MAX（比如 1.0→3.0）
+        # bias_factor from 1 to 1 + BIAS_MAX
         BIAS_MAX = 2.0
         bias_factor = 1.0 + BIAS_MAX * prog
-        # 对最后一个池（i_vhard）乘以 bias
         w[-1] *= bias_factor
 
-    # （可选）随时间增加 hardest 的 min_share
     base_min_share = HARDEST_MIN_SHARE_INT  # 你现在是 0.10
     if step is not None and max_step is not None and max_step > 0:
         extra_share = 0.25 * np.clip(step / max_step, 0.0, 1.0)   # 最多再加 0.25
@@ -177,17 +175,17 @@ def global_defender_sr():
 def compute_weights_def(step: int = None, max_step: int = None):
     gsr = global_defender_sr()
     if gsr < 0.35:
-        # defender 太惨 → 更强调 SR，弱化长度项
+        # defender too weak, increase sr sampling weight
         k_sr = max(GAIN_K_DEF_SR, 3.5)
         k_len = 0.3
         hardest_share_base = max(HARDEST_MIN_SHARE_DEF, 0.20)
     elif gsr < 0.55:
-        # defender 正常区间
+
         k_sr = GAIN_K_DEF_SR
         k_len = max(0.5 * K_LEN_DEF, 0.4)
         hardest_share_base = HARDEST_MIN_SHARE_DEF
     else:
-        # defender 太强 → 稍微提高长度项比重，防止刷太简单
+        # defender too strong, increase episode length sampling weight
         k_sr = max(0.8 * GAIN_K_DEF_SR, 2.0)
         k_len = max(K_LEN_DEF, 1.0)
         hardest_share_base = HARDEST_MIN_SHARE_DEF
@@ -197,10 +195,8 @@ def compute_weights_def(step: int = None, max_step: int = None):
         sr = _sr(st, TARGET_SR_DEF)
         lm = _len_median(st, TARGET_LEN_DEF)
 
-        # 成功率主导的负反馈
         w_sr = np.exp(k_sr * (TARGET_SR_DEF - sr))
 
-        # 长度钟形项（可弱化甚至关掉）
         sigma_fb = LEN_BW_FRAC * TARGET_LEN_DEF
         sigma = _len_mad(st, sigma_fb) if USE_MAD_BW else sigma_fb
         w_len = _length_bell_weight(lm, TARGET_LEN_DEF, k_len, sigma) if k_len > 0 else 1.0
@@ -210,14 +206,14 @@ def compute_weights_def(step: int = None, max_step: int = None):
     w = np.asarray(w, dtype=np.float64)
     w = np.maximum(w, MIN_WEIGHT_EPS_DEF)
 
-    # ===== curriculum bias：对 defender 也给一点 hardest 偏置（比 intruder 温和） =====
+    # ===== curriculum bias =====
     if step is not None and max_step is not None and max_step > 0:
         prog = np.clip(step / max_step, 0.0, 1.0)
         BIAS_MAX_DEF = 1.0  # defender 的 bias 小一点
         bias_factor = 1.0 + BIAS_MAX_DEF * prog
         w[-1] *= bias_factor  # 对 d_vhard 动手
 
-    # ===== hardest_min_share 也随时间略微抬高 =====
+    # ===== hardest_min_share  =====
     if step is not None and max_step is not None and max_step > 0:
         extra_share = 0.15 * np.clip(step / max_step, 0.0, 1.0)  # defender 就少抬一点
         local_min_share = min(hardest_share_base + extra_share, 0.5)
@@ -370,7 +366,6 @@ collected_eps = 0         # how many episodes collected in current rollout
 updates_done = 0          # number of PPO updates already performed
 CENTER_DEFENDER = False
 while updates_done < NUM_UPDATES:
-
     # ---- Pick a difficulty pool for THIS episode based on recent success rates ----
     w_int = compute_weights_int(step=updates_done, max_step=NUM_UPDATES)
     w_def = compute_weights_def(step=updates_done, max_step=NUM_UPDATES)

@@ -25,14 +25,16 @@ __email__ = 'rolando.fernandez1.civ@army.mil'
 __status__ = 'Dev'
 import random
 
-#declare global variable
+# declare global variable
 ATT_Sensing_region = 0.25
 HVT_Size = 0.45
 HVT_Sensing_region = 0.3
 V = 0.7
-Speed_Factor = 0.3
+Speed_Factor = 0.5
 Map_size = 1
-Agent_size = 0.02
+Agent_size = 0.03
+
+
 class Scenario(BaseScenario):
     """
     Define the world, reward, and observations for the scenario.
@@ -42,7 +44,7 @@ class Scenario(BaseScenario):
         # Debug verbose output
         self.debug = False
 
-    def make_world(self): #, args): BiB: args not used
+    def make_world(self):  # , args): BiB: args not used
         """
         Construct the world
 
@@ -52,7 +54,7 @@ class Scenario(BaseScenario):
         # Debug verbose output
         self.debug = False
 
-        # Boolean variable to detect if intruder enter HVT sensing range
+        # Boolean variable to detect if intruder enters HVT sensing range
         self.in_HVT = False
         # Create world and set properties
         world = World()
@@ -87,21 +89,20 @@ class Scenario(BaseScenario):
         # 50% of the HVT size
         defender_size = hvt_size * 0.5
         '''
-        #---------------------BiB------------------------
-        attacker_size = size #1/160
-        attacker_sense_region_size = ATT_Sensing_region#size * (4 / factor) #1/10
+        # ---------------------BiB------------------------
+        attacker_size = size  # 1/160
+        attacker_sense_region_size = ATT_Sensing_region  # size * (4 / factor) #1/10
 
         defender_size = size
-        defender_sense_region_size = size * (4 / factor) #1/10
+        defender_sense_region_size = size * (4 / factor)  # 1/10
 
-        hvt_size = HVT_Size#size + defender_sense_region_size #17/160
+        hvt_size = HVT_Size  # size + defender_sense_region_size #17/160
         hvt_sensing_region = HVT_Sensing_region
-        hvt_sense_region_size = hvt_size + hvt_sensing_region#size * (20 / factor) #
-
+        hvt_sense_region_size = hvt_size + hvt_sensing_region  # size * (20 / factor) #
 
         # 50% of the HVT size
-        #defender_size = hvt_size * 0.5
-        #------------------------------------------------
+        # defender_size = hvt_size * 0.5
+        # ------------------------------------------------
 
         # Attacker
         world.agents[0].name = 'agent {}'.format(1)
@@ -151,6 +152,7 @@ class Scenario(BaseScenario):
         self.reset_world(world, 0)
 
         return world
+
     def engage_phase_pos(self):
 
         angle = random.uniform(0, 2 * math.pi)
@@ -190,7 +192,7 @@ class Scenario(BaseScenario):
             intruder_y = Intruder_pos[1]
 
         while Defender_pos == True:
-            #rho_defender = intruder_sensing_region * math.sqrt(random.random())
+            # rho_defender = intruder_sensing_region * math.sqrt(random.random())
             theta_defender = random.uniform(0, 2*math.pi)
             defender_x = intruder_x + intruder_sensing_region * math.cos(theta_defender)
             defender_y = intruder_y + intruder_sensing_region * math.sin(theta_defender)
@@ -200,25 +202,24 @@ class Scenario(BaseScenario):
 
         return [intruder_x, intruder_y], [defender_x, defender_y]
 
-
     def random_agents_inside_HVT(self, inside_HVT):
         '''
-        0: defender randomly generate inside HVT
-        1: defender randomly generate outside HVT but inside HVT sensing range
-        2: defender randomly generate inside HVT sening range
+        0: defender randomly generated inside HVT
+        1: defender randomly generated outside HVT but inside HVT sensing range
+        2: defender randomly generated inside HVT sensing range
         '''
         HVT_size = HVT_Size
         sensing_range = HVT_Sensing_region
         HVT_sensing_range = HVT_size + sensing_range
-        low_bound = -HVT_size #HVT size
+        low_bound = -HVT_size  # HVT size
         high_bound = HVT_size
         rng = random.Random()
-        #rng.seed(42)
+        # rng.seed(42)
         pos_x = 100
         if inside_HVT == 0:
             pos_y = rng.uniform(low_bound, high_bound)
             while pos_x * pos_x + pos_y * pos_y > pow(high_bound, 2):
-                pos_x = rng.uniform(low_bound, high_bound)  # * (1 if random.randint(0, 1) == 0 else -1)
+                pos_x = rng.uniform(low_bound, high_bound)
             return [pos_x, pos_y]
         elif inside_HVT == 1:
             pos_y = rng.uniform(-1*HVT_sensing_range, HVT_sensing_range)
@@ -236,20 +237,21 @@ class Scenario(BaseScenario):
         sensing_range = HVT_Sensing_region
         HVT_sensing_range = HVT_size + sensing_range + 0.1
         rng = random.Random()
+
         def inside_HVT():
             theta = np.random.uniform(0, 2*np.pi)
 
-            #r = np.sqrt(np.random.uniform(self.adv_respawn_pos**2, (HVT_size + sensing_range)**2))
+            # r = np.sqrt(np.random.uniform(self.adv_respawn_pos**2, (HVT_size + sensing_range)**2))
             r = world.adv_respawn_pos
             pos_x = r * np.cos(theta)
             pos_y = r * np.sin(theta)
             return [pos_x, pos_y]
 
         def outside_HVT():
-            #intruder pos initial
-            low_bound = -Map_size#map max size
+            # intruder initial position
+            low_bound = -Map_size  # map max size
             high_bound = Map_size
-            pos_x, pos_y = 0,0
+            pos_x, pos_y = 0, 0
             dist_sq = (pos_x)**2 + (pos_y)**2
             while dist_sq < HVT_sensing_range**2:
                 pos_x = np.random.uniform(low_bound, high_bound)
@@ -264,11 +266,11 @@ class Scenario(BaseScenario):
 
     def sample_positions_with_sensing(self, hvt_pos, intruder_r, defender_r, seed=None):
         """
-        基于三个参数采样 (intruder, defender)：
-          - 若 intruder_r ≤ sensing_range：intruder 在 HVT 的半径 intruder_r 的圆周上。
-            否则：intruder 在环带 [sensing_range, intruder_r] 内面积均匀采样。
-          - 若 defender_r ≤ sensing_range：defender 在 intruder 的半径 defender_r 的圆周上。
-            否则：defender 在 HVT 的 sensing_range 圆盘内（相对 HVT）面积均匀采样。
+        Sample (intruder, defender) positions based on three parameters:
+          - If intruder_r ≤ sensing_range: intruder is on the circle of radius intruder_r centered at HVT.
+            Otherwise: intruder is sampled uniformly in area from the annulus [sensing_range, intruder_r].
+          - If defender_r ≤ sensing_range: defender is on the circle of radius defender_r centered at intruder.
+            Otherwise: defender is sampled uniformly in area inside the sensing_range disk centered at HVT.
         """
 
         def _sample_on_circle(center, radius, rng):
@@ -279,7 +281,7 @@ class Scenario(BaseScenario):
             ], dtype=float)
 
         def _sample_in_annulus(center, r_min, r_max, rng):
-            # 面积均匀：先在 [r_min^2, r_max^2] 上取均匀，再开方
+            # Area-uniform sampling in an annulus: sample in [r_min^2, r_max^2] uniformly, then take sqrt
             r = np.sqrt(rng.uniform(r_min ** 2, r_max ** 2))
             theta = rng.uniform(0.0, 2 * np.pi)
             return np.array([
@@ -288,7 +290,7 @@ class Scenario(BaseScenario):
             ], dtype=float)
 
         def _sample_in_disk(center, r_max, rng):
-            # 面积均匀：半径平方均匀再开方
+            # Area-uniform sampling in a disk: sample radius^2 uniformly, then take sqrt
             r = np.sqrt(rng.uniform(0.0, r_max ** 2))
             theta = rng.uniform(0.0, 2 * np.pi)
             return np.array([
@@ -298,38 +300,39 @@ class Scenario(BaseScenario):
 
         def _sample_on_circle_inside_disk(intr, hvt, defender_r, sensing_range, rng):
             """
-            从以 intr 为圆心、半径 defender_r 的圆周上，采样一个点，且该点需位于
-            以 hvt 为圆心、半径 sensing_range 的圆盘内。
-            若无可行解，返回 None。
+            Sample a point on the circle centered at intr with radius defender_r, such that
+            the point lies inside the disk centered at hvt with radius sensing_range.
+            If there is no feasible solution, return a fallback.
             """
             dx, dy = hvt[0] - intr[0], hvt[1] - intr[1]
             d = np.hypot(dx, dy)
 
-            # 特例：intr 与 HVT 重合
+            # Special case: intruder coincides with HVT
             if d == 0.0:
                 if defender_r <= sensing_range:
-                    return _sample_on_circle(intr, defender_r, rng)  # 整个圆都在盘内
+                    # The entire defender circle is within the HVT sensing disk
+                    return _sample_on_circle(intr, defender_r, rng)
                 else:
-                    return _sample_in_disk(hvt_pos, sensing_range, rng)  # 完全不可行
+                    # No feasible circle point; sample anywhere in the HVT sensing disk instead
+                    return _sample_in_disk(hvt_pos, sensing_range, rng)
 
-            # 余弦定理推导的阈值：cos(alpha) >= k
-            # alpha 是 (defender方向) 与 (intr->HVT) 之间的夹角
+            # From the cosine rule: cos(alpha) >= k
+            # alpha is the angle between defender direction and (intr -> HVT) direction
             k = (defender_r ** 2 + d ** 2 - sensing_range ** 2) / (2.0 * defender_r * d)
 
             if k > 1.0:
-                # 无角度能满足（圆与盘不相交且完全在外侧）
-                return np.array([0.0, 0.0])#_sample_in_disk(hvt_pos, sensing_range, rng)
+                # No angle satisfies the condition (circle is completely outside the disk)
+                return np.array([0.0, 0.0])  # fallback: invalid marker or adjust as needed
             elif k <= -1.0:
-                # 整个圆都在盘内：任意角度
+                # Entire circle lies inside the disk: any angle is valid
                 return _sample_on_circle(intr, defender_r, rng)
             else:
-                # 只有中心指向 HVT 的方向附近的一段圆弧可行
-                arc = np.arccos(k)  # 可行角度范围大小
-                base = np.arctan2(dy, dx)  # intr -> HVT 的方向
-                theta = base + rng.uniform(-arc, arc)  # 在可行弧段上均匀采样
+                # Only a circular arc around the direction intr->HVT is feasible
+                arc = np.arccos(k)  # half-width of the feasible angle interval
+                base = np.arctan2(dy, dx)  # direction from intr to HVT
+                theta = base + rng.uniform(-arc, arc)  # sample uniformly within feasible arc
                 return np.array([intr[0] + defender_r * np.cos(theta),
                                  intr[1] + defender_r * np.sin(theta)], dtype=float)
-
 
         rng = np.random.default_rng(seed)
         sensing_range = HVT_Size + HVT_Sensing_region
@@ -340,10 +343,44 @@ class Scenario(BaseScenario):
             intr = _sample_in_annulus(hvt_pos, sensing_range, 1.0, rng)
 
         # --- defender ---
-        defdr = _sample_on_circle_inside_disk(intr, [0.0, 0.0],defender_r, sensing_range, rng)
+        defdr = _sample_on_circle_inside_disk(intr, [0.0, 0.0], defender_r, sensing_range, rng)
 
         return intr, defdr
 
+    def sample_intruder_pos_q1_outside_sense(self, world,
+                                             r_margin: float = 1e-3,
+                                             r_max: float = 1.0):
+        """
+        Sample an intruder spawn position outside the HVT sensing range and in the
+        first quadrant (relative to the HVT).
+        world: env.world
+        r_margin: small margin added beyond the sensing region to avoid numerical edge cases
+        r_max: maximum respawn radius (can be adjusted based on map size)
+        """
+        hvt = world.landmarks[0]
+        cx, cy = hvt.state.p_pos  # HVT position
+        r_min = float(hvt.sense_region) + r_margin
+
+        # If the world defines a custom respawn radius, use it as r_max
+        if hasattr(world, "adv_respawn_pos"):
+            r_max = max(r_min + 1e-3, float(world.adv_respawn_pos))
+
+        # Simple rejection sampling: try several times to avoid rare out-of-bounds cases
+        for _ in range(128):
+            # Radius sampled uniformly from [r_min, r_max]
+            r = np.random.uniform(r_min, r_max)
+            # Angle sampled from [0, π/2], i.e., first quadrant
+            theta = np.random.uniform(0.0, 0.5 * np.pi)
+            x = cx + r * np.cos(theta)
+            y = cy + r * np.sin(theta)
+
+            # If the map is [-0.5, 0.5]×[-0.5, 0.5], enforce these bounds here
+            # Assuming a 1x1 map with center at (0, 0):
+            if -0.5 <= x <= 0.5 and -0.5 <= y <= 0.5:
+                return np.array([x, y], dtype=np.float32)
+
+        # Fallback: if no valid point is found, place intruder just outside sensing region along the diagonal
+        return np.array([cx + r_min, cy + r_min], dtype=np.float32)
 
     def reset_world(self, world, restart_in_HVT):
         """
@@ -355,11 +392,11 @@ class Scenario(BaseScenario):
         # Set random initial states for HVT
         for landmark in world.landmarks:
             if not landmark.boundary:
-                #landmark.state.p_pos = np.random.uniform(-0.39, +0.39, world.dimension_position)
-                landmark.state.p_pos = np.zeros(world.dimension_position) #BiB: changed to fix @ origin
+                # landmark.state.p_pos = np.random.uniform(-0.39, +0.39, world.dimension_position)
+                landmark.state.p_pos = np.zeros(world.dimension_position)  # BiB: changed to fix at origin
                 landmark.state.p_vel = np.zeros(world.dimension_position)
 
-        # TODO: Set sudo random postions for defender and attacker dependent on HVT
+        # TODO: Set pseudo-random positions for defender and attacker dependent on HVT
 
         # Set random initial states for agents
         for agent in world.agents:
@@ -367,18 +404,18 @@ class Scenario(BaseScenario):
             agent.state.p_vel = np.zeros(world.dimension_position)
             agent.state.c = np.zeros(world.dimension_communication)
 
-        #BiB: set fixed initial locations
-        #pos = self.engage_phase_pos()
-        #random.seed()
+        # BiB: set fixed initial locations
+        # pos = self.engage_phase_pos()
+        # random.seed()
         self.in_HVT = False
         att_pos, def_pos = self.sample_positions_with_sensing([0.0, 0.0], world.adv_respawn_pos, world.def_respawn_pos)
-        #asym_pos_att, asym_pos_def = self.asym_phase_pos(Intruder_pos=[0.55, 0.5], Defender_pos=True)
-        world.agents[0].state.p_pos = np.asarray(att_pos)#np.asarray(pos[0])#np.asarray(self.random_agents_with_constrain_intruer())#np.asarray([0.6, 0.7])#np.asarray(self.random_agents_with_constrain_intruer())
+        # asym_pos_att, asym_pos_def = self.asym_phase_pos(Intruder_pos=[0.55, 0.5], Defender_pos=True)
+        world.agents[0].state.p_pos = np.asarray(att_pos)
         if not restart_in_HVT:
-            world.agents[1].state.p_pos = np.asarray(def_pos)#np.asarray(pos[1])#np.asarray(self.random_agents_inside_HVT(2))#np.asarray([0.0, 0.0])#np.asarray(self.random_agents_inside_HVT(False))
+            world.agents[1].state.p_pos = np.asarray(def_pos)
         else:
             world.agents[1].state.p_pos = np.asarray([0.0, 0.0])
-            world.agents[0].state.p_pos = np.asarray(self.random_agents_with_constrain_intruer(world))
+            world.agents[0].state.p_pos = self.sample_intruder_pos_q1_outside_sense(world, world.landmarks[0].sense_region)#np.asarray(self.random_agents_with_constrain_intruer(world))
 
     def good_agents(self, world):
         """
@@ -419,7 +456,7 @@ class Scenario(BaseScenario):
         angle = None
         if not self.in_HVT:
             if world.in_sense_region(hvt, intruder):
-                #angle = self.angle_asym([0, 0], intruder.state.p_pos, defender.state.p_pos)
+                # angle = self.angle_asym([0, 0], intruder.state.p_pos, defender.state.p_pos)
                 angle = self.angle_xaxis(intruder)
                 self.in_HVT = True
         else:
@@ -492,7 +529,6 @@ class Scenario(BaseScenario):
         landmarks = [landmark for landmark in world.landmarks if not landmark.boundary]
         step_r, shape_r, final_r = 0, 0, 0
 
-
         # Determine collisions with attackers, assign reward
 
         if world.is_collision(agent, intruder):
@@ -504,12 +540,11 @@ class Scenario(BaseScenario):
 
         for hvt in landmarks:
             if world.is_collision(intruder, hvt):
-                final_r = -10#- ((1 - cur_dist)/1 * 2)
+                final_r = -10  # - ((1 - cur_dist)/1 * 2)
 
         # Determine if agent left the screen and assign penalties
         for coordinate_position in range(world.dimension_position):
             shape_r -= world.bound(abs(agent.state.p_pos[coordinate_position]))
-
 
         return [step_r, shape_r, final_r]
 
@@ -589,18 +624,18 @@ class Scenario(BaseScenario):
         self_pos = [array('d', [0, 0])]
         self_vel = [array('d', [0, 0])]
         # obs for intruder
-        #print(landmark.state.p_pos - intruder.state.p_pos)
+        # print(landmark.state.p_pos - intruder.state.p_pos)
         if agent.adversary:
             if world.in_sense_region(intruder, hvt):
-                #nearest_point = nearest_point_on_circle(intruder.state.p_pos, hvt.state.p_pos,
-                #                                        hvt.sense_region)
+                # nearest_point = nearest_point_on_circle(intruder.state.p_pos, hvt.state.p_pos,
+                #                                         hvt.sense_region)
                 landmarks_pos = [hvt.state.p_pos - intruder.state.p_pos]
             if world.in_sense_region(intruder, defender):
                 other_pos = [defender.state.p_pos - intruder.state.p_pos]
                 other_vel = [defender.state.p_vel]
             self_pos = [intruder.state.p_pos]
             self_vel = [intruder.state.p_vel]
-            return np.concatenate(self_vel + self_pos + landmarks_pos + other_pos + other_vel )
+            return np.concatenate(self_vel + self_pos + landmarks_pos + other_pos + other_vel)
 
         else:
             if world.in_sense_region(hvt, intruder):
@@ -610,9 +645,8 @@ class Scenario(BaseScenario):
                 other_vel = [intruder.state.p_vel]
             self_pos = [defender.state.p_pos]
             self_vel = [defender.state.p_vel]
-        #print(self_vel , self_pos , landmarks_pos , other_pos , other_vel , hvt_sense_pos)
+            # print(self_vel , self_pos , landmarks_pos , other_pos , other_vel , hvt_sense_pos)
             return np.concatenate(self_vel + self_pos + landmarks_pos + other_pos + other_vel + hvt_sense_pos)
-
 
     def done(self, agent, world):
         """
