@@ -1,24 +1,3 @@
-'''====================================================================================
-Load learned policies, play HVT and record episodes for (later) visualization.
-Simplifying assumptions:
-(1) Agents receive joint observations;
-(2) Private observations are noise-free, no belief tracking;
-(3) Actions are deterministic
-
-Copyright (C) August, 2024  Bikramjit Banerjee
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
-
-===================================================================================='''
-
 import sys, time
 import numpy as np
 from ac_nets import *
@@ -28,8 +7,8 @@ from multiagent_particle_env.scenarios.eot.simple_hvt_1v1_random import Scenario
 from multiagent_particle_env.logger import Logger
 
 CUDA=True
-NUM_EPISODES = 5
-STEPS_PER_EPISODE = 200
+NUM_EPISODES = 5000
+STEPS_PER_EPISODE = 100
 
 scenario='eot/simple_hvt_1v1_random_orig'
 envs=make_env(scenario_name=scenario, logging=True, done=True)
@@ -40,9 +19,11 @@ device = 'cpu' if not CUDA else 'cuda'
 actor1 = ActorNetwork("act1", n_features, n_actor_actions, 1.0, 1.0, cuda=CUDA)
 actor2 = ActorNetwork("act2", n_features, n_actor_actions, 1.0, 1.0, cuda=CUDA)
 #==============Load defender's best policy, and attacker's contemporary policy======================
-actor1.net.load_state_dict(torch.load("last_act1"))
-actor2.net.load_state_dict(torch.load("last_act2")) #BiB: Also select def/att @ bottom
-
+actor1.net.load_state_dict(torch.load("TrainResult/0.85_RandAtt_Def_0.2Pt_0.1Pa_0.3Hvt#281/last_act1"))
+actor2.net.load_state_dict(torch.load("TrainResult/0.85_RandAtt_Def_0.2Pt_0.1Pa_0.3Hvt#281/last_act2")) #BiB: Also select def/att @ bottom
+DefWinCount = 0
+AttWinCount = 0
+EvenCount = 0
 for ep in range(NUM_EPISODES):
     o1, o2 = envs.reset()
     print("HVT @",envs.world.landmarks[0].state.p_pos)
@@ -68,21 +49,23 @@ for ep in range(NUM_EPISODES):
         o2_ = torch.tensor(o2_, dtype=torch.float, device=device)
         a1_ = actor1.sample_action( o1_)
         a2_ = actor2.sample_action( o2_)
-        ep_r[0] += r[0]
-        ep_r[1] += r[1]
+        ep_r[0] += sum(r[0])
+        ep_r[1] += sum(r[1])
         if np.any(done):
             print(f'Done occurred in episode {ep}, step {step}: {done}. Rewards={ep_r}')
+            if done[0] == True:
+                AttWinCount += 1
+            else:
+                DefWinCount += 1
             break
         else:
             (o1, o2), (a1, a2) = (o1_, o2_), (a1_, a2_)
+    if not np.any(done):
+        EvenCount += 1
 
-import os
-current_path=os.getcwd()
-logdir="log"
-full_path=os.path.join(current_path,logdir)
-for k in  envs.logger.logs.keys():
-    filename = f"logfile_{k}_def" #BiB: change def/att based on whose best policy was loaded
-    print(full_path+"/"+filename)
-    if os.path.exists(full_path+"/"+filename+".csv"):
-        os.remove(full_path+"/"+filename+".csv")
-    envs.logger.save(k,path=full_path,filename=filename)
+att_win_rate = AttWinCount/NUM_EPISODES
+def_win_rate = DefWinCount/NUM_EPISODES
+even_rate = EvenCount/NUM_EPISODES
+print('Intruder win rate is: ', att_win_rate, ' in ', NUM_EPISODES, ' runs.' )
+print('Defender win rate is: ', def_win_rate, ' in ', NUM_EPISODES, ' runs.' )
+print('Even rate is: ', even_rate, ' in ', NUM_EPISODES, ' runs.' )

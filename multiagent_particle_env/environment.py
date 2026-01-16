@@ -12,7 +12,7 @@ Updated and Enhanced version of OpenAI Multi-Agent Particle Environment
 
 import gym
 import numpy as np
-
+import torch
 from multiagent_particle_env.core import TurretAgent
 
 __author__ = 'Rolando Fernandez'
@@ -284,7 +284,7 @@ class MultiAgentEnv(gym.Env):
                 agent_data = [episode, step, i] + self.logging_callback(agent, self.world) + [reward, done, info]
                 self.logger.add("State", agent_data)
 
-    def reset(self):
+    def reset(self, ep_num):
         """
         Reset the environment
 
@@ -292,7 +292,7 @@ class MultiAgentEnv(gym.Env):
             obs_n (list): Observations for n-number of agents
         """
         # Reset world
-        self.reset_callback(self.world)
+        self.reset_callback(self.world, ep_num)
 
         # Reset renderer
         self._reset_render()
@@ -322,6 +322,26 @@ class MultiAgentEnv(gym.Env):
                 obs_n, available_actions_n, state = self._get_obs()
 
                 return obs_n, available_actions_n, state
+
+    def get_agent_obs(self, agent=None):
+        """
+        Returns observations for a particular agent
+
+        Args:
+            agent (Attacker or Defender): string object
+
+        Returns:
+            A  np.array containing the world observations of a given agent
+        """
+        if self.observation_callback is None:
+            return np.zeros(0)
+
+        if agent == 'Attacker':
+            return self.observation_callback(self.world.agents[0], self.world)
+        elif agent == 'Defender':
+            return self.observation_callback(self.world.agents[1], self.world)
+        else:
+            return self.observation_callback(self.world)
 
     def _get_info(self, agent=None):
         """
@@ -678,3 +698,13 @@ class MultiAgentEnv(gym.Env):
             results.append(self.viewers[i].render(return_rgb_array=mode == 'rgb_array', save_filename=save_filename))
 
         return results
+
+    def save_model(self, path, name):
+
+        torch.save(self.world.agents[0].actor.net.state_dict(), f"{path}/{name}_Intruder")
+        torch.save(self.world.agents[1].actor.net.state_dict(), f"{path}/{name}_Defender")
+
+    def get_loss(self):
+        intruder_loss = [self.world.agents[0].actor_loss, self.world.agents[0].local_critic_loss, self.world.agents[0].global_critic_loss]
+        defender_loss = [self.world.agents[1].actor_loss, self.world.agents[1].local_critic_loss, self.world.agents[1].global_critic_loss]
+        return intruder_loss, defender_loss

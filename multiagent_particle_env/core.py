@@ -321,6 +321,16 @@ class World(object):
         # Turret Scenario
         self.total_scores = 0
 
+        # Maximium map size
+        self.map_size = 1
+
+        # Provide global observation to agents
+        self.provide_global_obs = False
+
+        # Place where intruder is respawn
+        self.adv_respawn_pos = None
+
+
     @property
     def entities(self):
         """
@@ -399,6 +409,8 @@ class World(object):
         # Update agent state
         for agent in self.agents:
             self.update_agent_state(agent)
+
+
 
     def apply_action_force(self, p_force):
         """
@@ -585,11 +597,11 @@ class World(object):
         Returns:
             (int or float) Penalty for agent exiting the screen
         """
-        if coordinate_position < 0.9:
+        if coordinate_position < self.map_size - 0.0:
             return 0
 
-        if coordinate_position < 1.0:
-            return (coordinate_position - 0.9) * 10
+        if coordinate_position < self.map_size:
+            return (coordinate_position - (self.map_size - 0.1)) * 10
 
         return min(np.exp(2 * coordinate_position - 2), 10)
 
@@ -602,7 +614,7 @@ class World(object):
         """
         boundary_list = []
         landmark_size = 1
-        edge = 1 + landmark_size
+        edge = self.map_size + landmark_size
         num_landmarks = int(edge * 2 / landmark_size)
 
         # Landmarks for x-Coordinate Plane
@@ -680,9 +692,10 @@ class World(object):
         # Compute actual distance between entities
         delta_pos = agent_a.state.p_pos - agent_b.state.p_pos
         dist = np.sqrt(np.sum(np.square(delta_pos)))
-
+        dist_min = 0
         # Minimum allowable distance
-        dist_min = agent_a.size + agent_b.size
+        dist_min = agent_a.size + agent_b.size #+ 0.06
+
 
         # Collision occurs is distance is less then the minimum allowable distance
         return True if dist < dist_min else False
@@ -704,7 +717,9 @@ class World(object):
             dist = np.sqrt(np.sum(np.square(delta_pos)))
 
             # Minimum allowable distance
-            dist_min = agent_a.size + agent_a.sense_region + agent_b.size
+            dist_min = agent_a.sense_region + agent_b.size
+
+            #dist_min = agent_a.size + agent_a.sense_region + agent_b.size
 
         else:
             # Compute actual distance between entities
