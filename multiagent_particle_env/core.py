@@ -11,6 +11,7 @@ Updated and Enhanced version of OpenAI Multi-Agent Particle Environment
 """
 
 import numpy as np
+import torch
 
 from multiagent_particle_env.utils import pos_to_ang, pos_to_angle
 
@@ -329,7 +330,12 @@ class World(object):
 
         # Place where intruder is respawn
         self.adv_respawn_pos = None
-
+        # Place where defender is respawn
+        self.def_respawn_pos = None
+        # Set defender sense range
+        self.def_sense_range = None
+        # set hvt size
+        self.hvt_size = None
 
     @property
     def entities(self):
@@ -690,6 +696,10 @@ class World(object):
             (boolean) True if collision occurred else False
         """
         # Compute actual distance between entities
+        if isinstance(agent_a, torch.Tensor):
+            delta_pos = agent_a - agent_b
+            dist = torch.sqrt(torch.sum(torch.pow(delta_pos,2),dim=1))
+
         delta_pos = agent_a.state.p_pos - agent_b.state.p_pos
         dist = np.sqrt(np.sum(np.square(delta_pos)))
         dist_min = 0

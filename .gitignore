@@ -1,0 +1,32 @@
+__pycache__/**
+API_token.py
+.neptune
+.vscode
+graph_plot.py
+1_3_speed,revised def distance reward
+1_4_speed & double size
+Half_speed
+log
+New_Obs_New_Rew
+New_Obs_Old_Rew
+New_Obs_0.5
+New_Obs_0.9
+New_reward_with_angle
+RandIntruderPosInsideHVT_DoubleSenseRange_RandDefenderPos
+RandPosIntruderInsideHTV_DoubleSensorRange_RandDefPos_BothFeedPropotionalDistRew
+RandPosIntruderInsideHTV_DoubleSensorRange_RandDefPos_PropotionalDistRew
+RandPosIntruderInsideHTV_DoubleSensorRange_RandDefPos_PropotionalDistRew_AttKeepDistDef
+best_act1
+best_act2
+Revised_Rew_0.9
+jt_act1
+jt_act2
+jt_best_act1
+jt_best_act2
+last_act1
+last_act2
+*.csv
+.idea
+*.png
+*.pyc
+*.pt
